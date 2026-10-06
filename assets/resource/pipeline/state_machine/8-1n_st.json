@@ -1,0 +1,219 @@
+{
+	"$schema": "https://maaxyy.com/schemas/pipeline.json",
+	"_说明": "状态机检查节点（8-1N）。全部为纯识别节点：供 agent/sm 状态机做状态检查与锚点点击（识别命中框中心）。坐标/阈值均映射自现有 8-1N pipeline（进入/部署/编队/战斗/重置/地图初始化）。",
+	"SM81N_stage_list": {
+		"recognition": "TemplateMatch",
+		"template": "combat/levelUp/8-1N/run8_1N.png",
+		"green_mask": true,
+		"next": []
+	},
+	"SM81N_stage_detail": {
+		"recognition": "OCR",
+		"roi": [828, 527, 329, 142],
+		"expected": ["普通作战"],
+		"next": []
+	},
+	"SM81N_map": {
+		"recognition": "TemplateMatch",
+		"roi": [366, 361, 114, 117],
+		"template": "combat/levelUp/8-1N/init.png",
+		"threshold": 0.5,
+		"next": []
+	},
+	"SM81N_map_t1": {
+		"recognition": "TemplateMatch",
+		"roi": [115, 488, 261, 231],
+		"template": "combat/levelUp/8-1N/map_team1.png",
+		"threshold": 0.5,
+		"next": []
+	},
+	"SM81N_map_t2": {
+		"recognition": "TemplateMatch",
+		"roi": [179, 78, 277, 233],
+		"template": "combat/levelUp/8-1N/map_team2.png",
+		"threshold": 0.5,
+		"next": []
+	},
+	"SM81N_map_t3": {
+		"recognition": "TemplateMatch",
+		"roi": [947, 101, 298, 316],
+		"template": [
+			"combat/levelUp/8-1N/map_team3.png",
+			"combat/levelUp/8-1N/map_teamh.png"
+		],
+		"threshold": 0.5,
+		"next": []
+	},
+	"SM81N_port1": {
+		"recognition": "TemplateMatch",
+		"roi": [115, 488, 261, 231],
+		"template": "combat/levelUp/8-1N/port_1.png",
+		"threshold": 0.5,
+		"next": []
+	},
+	"SM81N_port2": {
+		"recognition": "TemplateMatch",
+		"roi": [179, 78, 277, 233],
+		"template": "combat/levelUp/8-1N/port_2.png",
+		"threshold": 0.5,
+		"next": []
+	},
+	"SM81N_porth": {
+		"recognition": "TemplateMatch",
+		"roi": [947, 101, 298, 316],
+		"template": "combat/levelUp/8-1N/port_h.png",
+		"threshold": 0.6,
+		"next": []
+	},
+	"SM81N_deploy_confirm": {
+		"recognition": "OCR",
+		"roi": [1071, 592, 192, 88],
+		"expected": ["确定"],
+		"next": []
+	},
+	"SM81N_ammo_full": {
+		"recognition": "TemplateMatch",
+		"roi": [144, 74, 473, 184],
+		"template": "combat/levelUp/8-1N/Gnewfullammo.png",
+		"green_mask": true,
+		"threshold": 0.7,
+		"next": []
+	},
+	"SM81N_ammo_empty": {
+		"recognition": "TemplateMatch",
+		"roi": [144, 74, 473, 184],
+		"template": "combat/levelUp/8-1N/Gnewnoammo.png",
+		"green_mask": true,
+		"threshold": 0.7,
+		"next": []
+	},
+	"SM81N_formation": {
+		"recognition": "OCR",
+		"roi": [1067, 634, 212, 85],
+		"expected": "阵型编成",
+		"next": []
+	},
+	"SM81N_charselect": {
+		"recognition": "OCR",
+		"roi": [1044, 202, 207, 136],
+		"expected": ["显示全部"],
+		"next": []
+	},
+	"SM81N_fav_filter": {
+		"recognition": "OCR",
+		"roi": [830, 69, 243, 117],
+		"expected": ["显示", "收藏"],
+		"next": []
+	},
+	"SM81N_fav_confirm": {
+		"recognition": "OCR",
+		"roi": [892, 628, 109, 69],
+		"expected": ["确认"],
+		"next": []
+	},
+	"SM81N_team_char": {
+		"recognition": "TemplateMatch",
+		"template": "combat/levelUp/8-1N/G_team1.png",
+		"green_mask": true,
+		"threshold": 0.8,
+		"next": []
+	},
+	"SM81N_formation_confirm": {
+		"recognition": "OCR",
+		"roi": [1094, 591, 153, 93],
+		"expected": ["确定"],
+		"next": []
+	},
+	"SM81N_back2map": {
+		"recognition": "TemplateMatch",
+		"roi": [33, 0, 156, 166],
+		"template": "combat/levelUp/8-1N/back2map.png",
+		"next": []
+	},
+	"SM81N_battle": {
+		"recognition": "OCR",
+		"roi": [1138, 104, 90, 61],
+		"expected": "妖精",
+		"next": []
+	},
+	"SM81N_bar_end": {
+		"recognition": "OCR",
+		"roi": [1079, 590, 200, 124],
+		"expected": ["结束"],
+		"next": []
+	},
+	"SM81N_start": {
+		"recognition": "OCR",
+		"roi": [944, 571, 335, 148],
+		"expected": ["开始作战"],
+		"next": []
+	},
+	"SM81N_equip_overflow": {
+		"recognition": "OCR",
+		"roi": [775, 290, 169, 82],
+		"expected": ["装备强化"],
+		"next": []
+	},
+	"SM81N_supply": {
+		"recognition": "OCR",
+		"roi": [1049, 505, 229, 95],
+		"expected": ["补给"],
+		"next": []
+	},
+	"SM81N_popup_withdraw": {
+		"recognition": "OCR",
+		"roi": [956, 595, 101, 83],
+		"expected": ["撤离"],
+		"next": []
+	},
+	"SM81N_confirm_dialog": {
+		"recognition": "OCR",
+		"expected": ["确定"],
+		"next": []
+	},
+	"SM81N_plan": {
+		"recognition": "OCR",
+		"roi": [1086, 606, 182, 113],
+		"expected": ["执行"],
+		"next": []
+	},
+	"SM81N_dog1": {
+		"recognition": "TemplateMatch",
+		"roi": [165, 423, 202, 204],
+		"template": "combat/levelUp/8-1N/dog1.png",
+		"next": []
+	},
+	"SM81N_ap2": {
+		"recognition": "TemplateMatch",
+		"roi": [987, 617, 100, 102],
+		"template": "public/计划点数2.png",
+		"threshold": 0.75,
+		"next": []
+	},
+	"SM81N_ap1": {
+		"recognition": "TemplateMatch",
+		"roi": [961, 606, 126, 113],
+		"template": "combat/levelUp/8-1N/Gap1.png",
+		"green_mask": true,
+		"threshold": 0.7,
+		"next": []
+	},
+	"SM81N_t1wd": {
+		"recognition": "OCR",
+		"roi": [884, 606, 189, 81],
+		"expected": ["撤离"],
+		"next": []
+	},
+	"SM81N_withdraw_confirm": {
+		"recognition": "OCR",
+		"roi": [665, 429, 189, 127],
+		"expected": ["确定"],
+		"next": []
+	},
+	"SM81N_redeploy": {
+		"recognition": "OCR",
+		"roi": [398, 459, 205, 68],
+		"expected": ["重新"],
+		"next": []
+	}
+}

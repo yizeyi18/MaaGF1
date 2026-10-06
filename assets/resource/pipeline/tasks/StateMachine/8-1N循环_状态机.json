@@ -1,0 +1,10 @@
+{
+	"!81N状态机循环": {
+		"recognition": "DirectHit",
+		"action": "Custom",
+		"custom_action": "sm_run_8_1n",
+		"custom_action_param": {
+			"rounds": 1
+		}
+	}
+}

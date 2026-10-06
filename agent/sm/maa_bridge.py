@@ -1,0 +1,197 @@
+"""MaaBridge —— 把 MaaFramework Python 绑定适配为状态机的 SMContext。
+
+- 状态检查：context.run_recognition(node, image)（节点定义在 pipeline/state_machine/*.json）
+- 动作：controller 的 post_click / post_swipe / touch 事件（长按、双指捏合缩放）
+- 锚点动作：先识别后点击命中框中心（模板/OCR 通用），替代硬编码坐标
+- 停止：外部传入 threading.Event（由 main.py 的 tasker 事件监听置位）
+"""
+from __future__ import annotations
+
+import os
+import threading
+import time
+import traceback
+from typing import Optional
+
+from maa.context import Context
+
+from .core import (
+    ActionSpec,
+    ActionAnchorMissError,
+    CheckResult,
+    CheckSpec,
+    MissingImageError,
+    SMContext,
+    SMError,
+)
+from .missing import describe_missing, is_missing
+
+try:  # 复用 agent 现有日志（agent/action/log.py），导入失败时退回 print
+    from action.log import MaaLog_Debug, MaaLog_Info, MaaLog_Info as MaaLog_Warn, MaaLog_Info as MaaLog_Err
+    _LOG = True
+except Exception:  # pragma: no cover
+    _LOG = False
+
+
+def _log(level: str, msg: str) -> None:
+    if _LOG:
+        if level == "DEBUG":
+            MaaLog_Debug(msg)
+        elif level == "ERROR":
+            MaaLog_Err(msg)
+        else:
+            MaaLog_Info(msg)
+    else:  # pragma: no cover
+        print(f"[{level}] {msg}")
+
+
+class MaaBridge(SMContext):
+    def __init__(self, context: Context, stop_event: threading.Event,
+                 debug_dir: str = "debug_sm", stop_file: str = ""):
+        self._ctx = context
+        self._ctrl = context.tasker.controller
+        self._stop = stop_event
+        self._debug_dir = debug_dir
+        self._stop_file = stop_file
+        self._missing_warned: set = set()
+
+    def _warn_missing_once(self, node: str) -> None:
+        if node not in self._missing_warned:
+            self._missing_warned.add(node)
+            self.log("WARNING", "缺失图片占位（按未命中处理）:\n" + describe_missing(node))
+
+    # ---------------- SMContext ----------------
+
+    @property
+    def stop_requested(self) -> bool:
+        if self._stop.is_set():
+            return True
+        # 停止文件：测试期兜底手段 —— 在 agent 工作目录创建该文件即可请求停止
+        return bool(self._stop_file) and os.path.exists(self._stop_file)
+
+    def log(self, level: str, msg: str) -> None:
+        _log(level, msg)
+
+    def screenshot(self) -> "object":
+        try:
+            job = self._ctrl.post_screencap()
+            job.wait()
+            return job.result
+        except Exception as e:
+            raise SMError(f"截图失败（框架/连接异常）: {e}") from e
+
+    def check(self, spec: CheckSpec, image: Optional["object"] = None) -> CheckResult:
+        # 缺失图片：按"未命中"处理并告警（不抛异常）。
+        # 状态定位(locate)会对所有状态跑检查，若抛异常整个流会崩；
+        # 而 v1 的 8-1N 流不依赖缺失检查，占位状态(main)自然永不匹配。
+        if is_missing(spec.node):
+            self._warn_missing_once(spec.node)
+            return CheckResult(ok=(not spec.inverted), spec=spec, detail=None)
+        if image is None:
+            image = self.screenshot()
+        try:
+            detail = self._ctx.run_recognition(spec.node, image)
+        except Exception as e:
+            raise SMError(f"识别 {spec.node} 失败: {e}") from e
+        if detail is None:
+            return CheckResult(ok=(not spec.inverted), spec=spec, detail=None)
+        hit = bool(detail.hit)
+        return CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
+
+    def do_action(self, action: ActionSpec) -> None:
+        try:
+            self._do_action(action)
+        except SMError:
+            raise
+        except Exception as e:
+            raise SMError(f"动作 {action.describe()} 执行失败: {e}\n{traceback.format_exc()}") from e
+
+    def save_debug_image(self, tag: str, image: "object") -> str:
+        os.makedirs(self._debug_dir, exist_ok=True)
+        path = os.path.join(self._debug_dir, f"{time.strftime('%Y%m%d_%H%M%S')}_{tag}.png")
+        try:
+            import numpy as np
+            from PIL import Image
+            arr = np.asarray(image)
+            if arr.ndim == 3 and arr.shape[2] == 4:
+                arr = arr[:, :, :3]
+            Image.fromarray(arr).save(path)
+        except Exception as e:
+            _log("WARNING", f"调试截图保存失败 {path}: {e}")
+            return ""
+        return path
+
+    # ---------------- 内部实现 ----------------
+
+    def _do_action(self, a: ActionSpec) -> None:
+        if a.kind == "wait":
+            time.sleep(max(a.ms, 0) / 1000.0)
+            return
+
+        x, y = a.x, a.y
+        image = None
+
+        if a.if_node:
+            image = self.screenshot()
+            detail = self._recognize(a.if_node, image)
+            if detail is None or not detail.hit:
+                self.log("DEBUG", f"可选动作跳过（{a.if_node} 未命中）: {a.describe()}")
+                return
+            if a.anchor_node and a.anchor_node == a.if_node:
+                x, y = self._center(detail, a)
+
+        if a.anchor_node:
+            if image is None:
+                image = self.screenshot()
+            detail = self._recognize(a.anchor_node, image)
+            if detail is None or not detail.hit or detail.box is None:
+                self.save_debug_image(f"anchor_miss_{a.anchor_node}", image)
+                raise ActionAnchorMissError(
+                    f"锚点识别未命中: {a.anchor_node}（动作 {a.describe()}）"
+                )
+            x, y = self._center(detail, a)
+
+        if a.kind == "click":
+            self._ctrl.post_click(x, y).wait()
+        elif a.kind == "long_press":
+            self._ctrl.post_touch_down(x, y, 0, 1).wait()
+            time.sleep(max(a.duration, 10) / 1000.0)
+            self._ctrl.post_touch_up(0).wait()
+        elif a.kind == "swipe":
+            self._ctrl.post_swipe(x, y, a.x2, a.y2, max(a.duration, 100)).wait()
+        elif a.kind == "zoom_in":
+            self._pinch(x, y, dist=abs(a.duration) or 60, inward=False)
+        elif a.kind == "zoom_out":
+            self._pinch(x, y, dist=abs(a.duration) or 60, inward=True)
+        else:
+            raise SMError(f"未知动作类型: {a.kind}")
+        self.log("DEBUG", f"动作完成: {a.describe()}")
+
+    @staticmethod
+    def _center(detail: "object", a: ActionSpec) -> tuple[int, int]:
+        box = detail.box
+        return box.x + box.w // 2 + a.dx, box.y + box.h // 2 + a.dy
+
+    def _recognize(self, node: str, image: "object"):
+        if is_missing(node):
+            raise MissingImageError(describe_missing(node))
+        return self._ctx.run_recognition(node, image)
+
+    def _pinch(self, cx: int, cy: int, dist: int, inward: bool) -> None:
+        """双指水平捏合缩放。inward=False 手指张开=放大，True 手指收拢=缩小。
+
+        注意：仅 ADB（安卓模拟器）控制器支持双指捏合（contact=手指号）；
+        Win32 控制器 contact=鼠标按键、且框架无滚轮事件，缩放暂不支持
+        （v1 的 8-1N 流不使用缩放动作，不影响）。
+        """
+        d0, d1 = (30 + dist, 30) if inward else (30, 30 + dist)
+        steps = 4
+        self._ctrl.post_touch_down(cx - d0, cy, 0, 1).wait()
+        self._ctrl.post_touch_down(cx + d0, cy, 1, 1).wait()
+        for i in range(1, steps + 1):
+            d = d0 + (d1 - d0) * i // steps
+            self._ctrl.post_touch_move(cx - d, cy, 0, 1).wait()
+            self._ctrl.post_touch_move(cx + d, cy, 1, 1).wait()
+            time.sleep(0.03)
+        self._ctrl.post_touch_up(0).wait()
+        self._ctrl.post_touch_up(1).wait()

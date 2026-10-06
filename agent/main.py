@@ -142,6 +142,8 @@ try:
     print("Starting to import custom modules...")
     import my_reco
     import action
+    import sm
+    import sm.sm_action  # 状态机自定义动作（sm_run_8_1n）
     # 注意：action 模块现在只包含 log，不再包含 watchdog
     print("Custom modules imported successfully")
     
@@ -196,6 +198,15 @@ def main():
         print("Waiting for AgentServer to fully start...")
         time.sleep(2)
         print("AgentServer startup wait completed")
+
+        # 注册状态机动作（8-1N 循环流）
+        try:
+            sm.sm_action.register_sm()
+            print(f"State machine action registered: {sm.sm_action.SM_ACTION_NAME}")
+        except Exception as e:
+            print(f"Warning: failed to register state machine action: {e}")
+            traceback.print_exc()
+
         print("Starting to wait for connections...")
         
         # AgentServer.join() 将阻塞直到连接结束
