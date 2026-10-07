@@ -58,6 +58,43 @@ def tool_kill_session(hub: "object", session_id: str) -> Dict[str, Any]:
     return hub.kill_session(session_id)
 
 
+def tool_list_windows(hub: "object", title_contains: str = "") -> Dict[str, Any]:
+    """诊断：列出所有顶层窗口（标题/类名/句柄/可见性）。"""
+    if os.name != "nt":
+        raise MaaMcpError("仅 Windows 可用")
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    out: List[Dict[str, Any]] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _cb(hwnd, lparam):
+        try:
+            n = user32.GetWindowTextW(hwnd, None, 0)
+            buf = ctypes.create_unicode_buffer(max(n, 0) + 1)
+            user32.GetWindowTextW(hwnd, buf, max(n, 0) + 1)
+            title = buf.value
+            m = user32.GetClassNameW(hwnd, None, 0)
+            cbuf = ctypes.create_unicode_buffer(max(m, 0) + 1)
+            user32.GetClassNameW(hwnd, cbuf, max(m, 0) + 1)
+            if title:  # 只列有标题的窗口
+                if title_contains and title_contains.lower() not in title.lower():
+                    return True
+                out.append({
+                    "hwnd": int(hwnd),
+                    "title": title,
+                    "class": cbuf.value,
+                    "visible": bool(user32.IsWindowVisible(hwnd)),
+                })
+        except Exception:
+            pass
+        return True
+
+    user32.EnumWindows(_cb, 0)
+    return {"count": len(out), "windows": out}
+
+
 # ======================================================================================
 # 基元：只读
 # ======================================================================================

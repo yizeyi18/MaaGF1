@@ -90,6 +90,11 @@ def register_tools(server: "object") -> None:
         return _call("kill_session", session_id=session_id)
 
     @server.tool()
+    def list_windows(title_contains: str = "") -> object:
+        """诊断：列出所有顶层窗口（标题/类名/句柄/可见性）。title_contains 过滤子串。"""
+        return _call("list_windows", title_contains=title_contains)
+
+    @server.tool()
     def screenshot(session_id: str = "", roi: Optional[List[int]] = None) -> object:
         """截图（返回 PNG 图片 + 尺寸元信息）。只读，任意 session 可用。"""
         return _call("screenshot", session_id=session_id, roi=roi)
@@ -193,6 +198,7 @@ _IMPL: Dict[str, Any] = {
     "list_sessions": T.tool_list_sessions,
     "create_session": T.tool_create_session,
     "kill_session": T.tool_kill_session,
+    "list_windows": T.tool_list_windows,
     "screenshot": T.tool_screenshot,
     "ocr": T.tool_ocr,
     "match": T.tool_match,
