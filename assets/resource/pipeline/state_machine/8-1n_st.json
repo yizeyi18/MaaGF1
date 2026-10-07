@@ -1,6 +1,6 @@
 {
 	"$schema": "https://maaxyy.com/schemas/pipeline.json",
-	"_说明": "状态机检查节点（8-1N）。全部为纯识别节点：供 agent/sm 状态机做状态检查与锚点点击（识别命中框中心）。坐标/阈值均映射自现有 8-1N pipeline（进入/部署/编队/战斗/重置/地图初始化）。",
+	"$说明": "状态机检查节点（8-1N）。全部为纯识别节点：供 agent/sm 状态机做状态检查与锚点点击（识别命中框中心）。坐标/阈值均映射自现有 8-1N pipeline（进入/部署/编队/战斗/重置/地图初始化）。",
 	"SM81N_stage_list": {
 		"recognition": "TemplateMatch",
 		"template": "combat/levelUp/8-1N/run8_1N.png",

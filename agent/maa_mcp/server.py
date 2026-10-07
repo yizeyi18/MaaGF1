@@ -230,7 +230,16 @@ def _build_app(api_key: str, stateless: bool = True) -> "object":
                      "互动操作（click/swipe/run_script/run_task/run_sm_8_1n）需 session 持有活跃锁。",
     )
     register_tools(server)
-    app = server.streamable_http_app(stateless_http=stateless)
+    # 关闭 SDK 默认的 DNS 重绑定保护（它默认只放行 127.0.0.1/localhost，
+    # 内网 IP 访问会被 421 拒绝）。本服务以 Bearer API Key 为鉴权边界。
+    security = None
+    try:
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    except ImportError:
+        pass
+    app = server.streamable_http_app(stateless_http=stateless, transport_security=security)
 
     class ApiKeyMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):

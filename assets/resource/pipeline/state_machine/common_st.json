@@ -1,6 +1,6 @@
 {
 	"$schema": "https://maaxyy.com/schemas/pipeline.json",
-	"_说明": "状态机检查节点（通用层）。SM_main_check = 主界面判定：主界面右侧'战斗'按钮的图标+文字双模板匹配（模板裁剪自主界面 1280x720 截图，避开了随活动变化的'活动'角标）。",
+	"$说明": "状态机检查节点（通用层）。SM_main_check = 主界面判定：主界面右侧'战斗'按钮的图标+文字双模板匹配（模板裁剪自主界面 1280x720 截图，避开了随活动变化的'活动'角标）。",
 	"SM_main_battle_icon": {
 		"recognition": "TemplateMatch",
 		"roi": [794, 367, 110, 90],
