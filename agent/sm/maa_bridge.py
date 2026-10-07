@@ -76,7 +76,7 @@ class MaaBridge(SMContext):
         try:
             job = self._ctrl.post_screencap()
             job.wait()
-            return job.result
+            return job.get()  # BGR ndarray
         except Exception as e:
             raise SMError(f"截图失败（框架/连接异常）: {e}") from e
 
@@ -111,11 +111,10 @@ class MaaBridge(SMContext):
         path = os.path.join(self._debug_dir, f"{time.strftime('%Y%m%d_%H%M%S')}_{tag}.png")
         try:
             import numpy as np
-            from PIL import Image
-            arr = np.asarray(image)
-            if arr.ndim == 3 and arr.shape[2] == 4:
-                arr = arr[:, :, :3]
-            Image.fromarray(arr).save(path)
+            from utils.png import encode_png
+            # 框架截图为 BGR(A)；encode_png 自动处理通道翻转与 alpha 丢弃
+            with open(path, "wb") as f:
+                f.write(encode_png(np.asarray(image), bgr=True))
         except Exception as e:
             _log("WARNING", f"调试截图保存失败 {path}: {e}")
             return ""

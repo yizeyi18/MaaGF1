@@ -1,0 +1,193 @@
+"""TaskerBridge —— 把 (Resource, Tasker, Controller) 适配为状态机的 SMContext。
+
+与 sm/maa_bridge.py（AgentServer Context 版）的区别：
+- 识别走 tasker.post_recognition + resource.get_node_data（standalone，无需 GUI 连接）
+- 动作走共享 controller
+
+识别节点参数转换：get_node_data 返回 {"recognition": {"type","param"}, ...}，
+param 与 maa.pipeline 中的参数 dataclass 字段一一对应。
+"""
+from __future__ import annotations
+
+import dataclasses
+import os
+import threading
+import time
+import traceback
+from typing import Dict, Optional, Tuple
+
+from sm.core import (
+    ActionAnchorMissError,
+    ActionSpec,
+    CheckResult,
+    CheckSpec,
+    MissingImageError,
+    SMContext,
+    SMError,
+)
+from sm.missing import describe_missing, is_missing
+
+
+def _reco_param_classes() -> Dict[str, type]:
+    from maa import pipeline as _p
+
+    return {
+        "DirectHit": _p.JDirectHit,
+        "TemplateMatch": _p.JTemplateMatch,
+        "FeatureMatch": _p.JFeatureMatch,
+        "ColorMatch": _p.JColorMatch,
+        "OCR": _p.JOCR,
+        "NeuralNetworkClassify": _p.JNeuralNetworkClassify,
+        "NeuralNetworkDetect": _p.JNeuralNetworkDetect,
+        "CustomRecognition": _p.JCustomRecognition,
+        "And": _p.JAnd,
+        "Or": _p.JOr,
+    }
+
+
+def node_to_reco(node_data: Dict) -> Tuple[str, "object"]:
+    """pipeline 节点 dict → (recognition_type, 参数 dataclass 实例)。"""
+    reco = (node_data or {}).get("recognition") or {}
+    rtype = reco.get("type", "")
+    param = reco.get("param") or {}
+    cls = _reco_param_classes().get(rtype)
+    if cls is None:
+        raise SMError(f"不支持的识别类型: {rtype or '(空)'}")
+    fields = {f.name for f in dataclasses.fields(cls)}
+    kwargs = {k: v for k, v in param.items() if k in fields}
+    return rtype, cls(**kwargs)
+
+
+class TaskerBridge(SMContext):
+    def __init__(self, hub: "object", session: "object", stop_event: threading.Event,
+                 debug_dir: str = "debug_sm"):
+        self._hub = hub
+        self._session = session
+        self._ctrl = hub.controller
+        self._resource = hub.resource
+        self._tasker = session.tasker
+        self._stop = stop_event
+        self._debug_dir = debug_dir
+        self._missing_warned: set = set()
+
+    # ---------------- SMContext ----------------
+
+    @property
+    def stop_requested(self) -> bool:
+        return self._stop.is_set() or self._hub.stop_sm.is_set()
+
+    def log(self, level: str, msg: str) -> None:
+        try:
+            from action.log import MaaLog_Debug, MaaLog_Info
+            (MaaLog_Debug if level == "DEBUG" else MaaLog_Info)(msg)
+        except Exception:
+            print(f"[{level}] {msg}")
+
+    def screenshot(self) -> "object":
+        return self._hub.screencap()
+
+    def check(self, spec: CheckSpec, image: "object" = None) -> CheckResult:
+        if is_missing(spec.node):
+            self._warn_missing_once(spec.node)
+            return CheckResult(ok=(not spec.inverted), spec=spec, detail=None)
+        if image is None:
+            image = self.screenshot()
+        detail = self._recognize(spec.node, image)
+        if detail is None:
+            return CheckResult(ok=(not spec.inverted), spec=spec, detail=None)
+        hit = bool(detail.hit)
+        return CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
+
+    def do_action(self, action: ActionSpec) -> None:
+        try:
+            self._do_action(action)
+        except SMError:
+            raise
+        except Exception as e:
+            raise SMError(f"动作 {action.describe()} 执行失败: {e}\n{traceback.format_exc()}") from e
+
+    def save_debug_image(self, tag: str, image: "object") -> str:
+        os.makedirs(self._debug_dir, exist_ok=True)
+        path = os.path.join(self._debug_dir, f"{time.strftime('%Y%m%d_%H%M%S')}_{tag}.png")
+        try:
+            import numpy as np
+
+            from utils.png import encode_png
+
+            arr = np.asarray(image)
+            with open(path, "wb") as f:
+                f.write(encode_png(arr, bgr=True))
+        except Exception as e:
+            self.log("WARNING", f"调试截图保存失败 {path}: {e}")
+            return ""
+        return path
+
+    # ---------------- 内部实现 ----------------
+
+    def _warn_missing_once(self, node: str) -> None:
+        if node not in self._missing_warned:
+            self._missing_warned.add(node)
+            self.log("WARNING", "缺失图片占位（按未命中处理）:\n" + describe_missing(node))
+
+    def _recognize(self, node: str, image: "object"):
+        if is_missing(node):
+            raise MissingImageError(describe_missing(node))
+        node_data = self._resource.get_node_data(node)
+        if node_data is None:
+            raise SMError(f"识别节点不存在: {node}（资源未加载或节点名错误）")
+        rtype, param = node_to_reco(node_data)
+        job = self._tasker.post_recognition(rtype, param, image)
+        job.wait()
+        try:
+            # 识别任务的 taskid 即 reco_id
+            return self._tasker.get_recognition_detail(job.job_id)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _center(detail: "object", a: ActionSpec) -> Tuple[int, int]:
+        box = detail.box
+        return box.x + box.w // 2 + a.dx, box.y + box.h // 2 + a.dy
+
+    def _do_action(self, a: ActionSpec) -> None:
+        if a.kind == "wait":
+            time.sleep(max(a.ms, 0) / 1000.0)
+            return
+
+        x, y = a.x, a.y
+        image = None
+
+        if a.if_node:
+            image = self.screenshot()
+            detail = self._recognize(a.if_node, image)
+            if detail is None or not detail.hit:
+                self.log("DEBUG", f"可选动作跳过（{a.if_node} 未命中）: {a.describe()}")
+                return
+            if a.anchor_node and a.anchor_node == a.if_node:
+                x, y = self._center(detail, a)
+
+        if a.anchor_node:
+            if image is None:
+                image = self.screenshot()
+            detail = self._recognize(a.anchor_node, image)
+            if detail is None or not detail.hit or detail.box is None:
+                self.save_debug_image(f"anchor_miss_{a.anchor_node}", image)
+                raise ActionAnchorMissError(
+                    f"锚点识别未命中: {a.anchor_node}（动作 {a.describe()}）"
+                )
+            x, y = self._center(detail, a)
+
+        if a.kind == "click":
+            self._ctrl.post_click(x, y).wait()
+        elif a.kind == "long_press":
+            self._ctrl.post_touch_down(x, y, 0, 1).wait()
+            time.sleep(max(a.duration, 10) / 1000.0)
+            self._ctrl.post_touch_up(0).wait()
+        elif a.kind == "swipe":
+            self._ctrl.post_swipe(x, y, a.x2, a.y2, max(a.duration, 100)).wait()
+        elif a.kind in ("zoom_in", "zoom_out"):
+            # Win32 控制器无捏合/滚轮事件（contact=鼠标按键）
+            raise SMError("zoom 动作仅 ADB 控制器支持（当前为 Win32）")
+        else:
+            raise SMError(f"未知动作类型: {a.kind}")
+        self.log("DEBUG", f"动作完成: {a.describe()}")

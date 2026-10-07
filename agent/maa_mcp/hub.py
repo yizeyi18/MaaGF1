@@ -1,0 +1,334 @@
+"""GameHub —— MCP 侧的游戏基础设施与 session 管理。
+
+- 窗口发现：EnumWindows + 正则（来自 interface.json 的 controller 配置）
+- 共享 Controller（Win32）与 Resource（bundle = resource 目录）
+- Session 创建/列出/终止；全局"活跃锁"：同一时间只有一个 session
+  能执行互动操作（点击/滑动/含动作的任务）——游戏进程同一机器只有一个
+- 资源热更新：写文件 + post_bundle 重载（有任务在跑时拒绝）
+"""
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import re
+import threading
+import time
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+
+class MaaMcpError(Exception):
+    """MCP 侧业务错误（工具层会转成结构化错误返回）。"""
+
+
+class SessionNotFoundError(MaaMcpError):
+    pass
+
+
+class ActiveLockError(MaaMcpError):
+    def __init__(self, holder: str):
+        self.holder = holder
+        super().__init__(
+            f"session '{holder}' 当前持有活跃锁（互动操作互斥）。"
+            f"等其任务结束/停止后再试，或 kill_session 释放。"
+        )
+
+
+class InfraError(MaaMcpError):
+    pass
+
+
+# ======================================================================================
+# 窗口发现（仅 Windows；非 Windows 平台导入本模块不触发）
+# ======================================================================================
+
+def find_game_window(title_regex: str, class_regex: str = "") -> Optional[Tuple[int, str, str]]:
+    """按标题/类名正则查找游戏窗口。返回 (handle, title, class_name)。"""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+
+    found: List[Tuple[int, str, str]] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _enum_cb(hwnd, lparam):
+        try:
+            n = user32.GetWindowTextW(hwnd, None, 0)
+            if n <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            title = buf.value
+            m = user32.GetClassNameW(hwnd, None, 0)
+            cls_buf = ctypes.create_unicode_buffer(m + 1)
+            user32.GetClassNameW(hwnd, cls_buf, m + 1)
+            cls = cls_buf.value
+            if re.search(title_regex, title, re.IGNORECASE) and (
+                not class_regex or re.search(class_regex, cls)
+            ):
+                found.append((hwnd, title, cls))
+        except Exception:
+            pass
+        return True
+
+    user32.EnumWindows(_enum_cb, 0)
+    return found[0] if found else None
+
+
+# ======================================================================================
+# GameHub
+# ======================================================================================
+
+class GameHub:
+    def __init__(self, project_root: str, cfg: "object"):
+        self.project_root = project_root
+        self.cfg = cfg
+        self.resource_dir = self._find_resource_dir(project_root)
+        self.interface = self._load_interface()
+        self.controller_cfg = self._load_controller_cfg()
+
+        self._lock = threading.RLock()
+        self.sessions: Dict[str, Any] = {}
+        self._seq = 0
+        self._active_session: Optional[str] = None
+        self.stop_sm = threading.Event()  # 状态机流的协作式停止
+
+        self._controller = None
+        self._resource = None
+        self._infra_error = ""
+        # Tasker 工厂（默认 maa.tasker.Tasker；可注入，便于测试/扩展）
+        self.tasker_factory: "object" = None
+
+    # ---------------- 基础设施（懒加载） ----------------
+
+    def _find_resource_dir(self, project_root: str) -> str:
+        for cand in (
+            os.path.join(project_root, "resource"),
+            os.path.join(project_root, "assets", "resource"),
+        ):
+            if os.path.isdir(cand):
+                return cand
+        raise InfraError(f"找不到 resource 目录（project_root={project_root}）")
+
+    def _load_interface(self) -> Dict[str, Any]:
+        for cand in (
+            os.path.join(self.project_root, "interface.json"),
+            os.path.join(self.project_root, "assets", "interface.json"),
+        ):
+            if os.path.isfile(cand):
+                with open(cand, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        return {}
+
+    def _load_controller_cfg(self) -> Dict[str, Any]:
+        ctrls = self.interface.get("controller") or []
+        if ctrls and isinstance(ctrls[0], dict):
+            c = ctrls[0]
+            return c.get(c.get("type", "Win32").lower(), c.get("win32", {})) or {}
+        return {}
+
+    def _window_regexes(self) -> Tuple[str, str]:
+        title = self.cfg.window_title_regex or self.controller_cfg.get("window_regex") or "少女前线"
+        cls = self.cfg.window_class_regex or self.controller_cfg.get("class_regex") or ""
+        return title, cls
+
+    def _ensure_infra(self) -> None:
+        with self._lock:
+            if self._controller is not None and self._resource is not None:
+                return
+            if self._infra_error:
+                raise InfraError(self._infra_error)
+            try:
+                from maa.controller import Win32Controller
+                from maa.resource import Resource
+            except Exception as e:
+                self._infra_error = f"框架 Python 绑定不可用（agent 应在 Windows 测试机运行）: {e}"
+                raise InfraError(self._infra_error) from e
+
+            if self._controller is None:
+                title_re, class_re = self._window_regexes()
+                hit = find_game_window(title_re, class_re)
+                if hit is None:
+                    self._infra_error = (
+                        f"找不到游戏窗口（title~'{title_re}' class~'{class_re or '.*'}'）。"
+                        f"请确认游戏已启动，或修改 maa_mcp.conf 的 window_title_regex。"
+                    )
+                    raise InfraError(self._infra_error)
+                h, title, cls = hit
+                try:
+                    self._controller = Win32Controller(
+                        h,
+                        screencap_method=int(self.controller_cfg.get("screencap", 16)),
+                        mouse_method=int(self.controller_cfg.get("mouse", 1)),
+                        keyboard_method=int(self.controller_cfg.get("keyboard", 1)),
+                    )
+                except Exception as e:
+                    self._infra_error = f"Win32Controller 创建失败: {e}"
+                    raise InfraError(self._infra_error) from e
+
+            if self._resource is None:
+                res = Resource()
+                job = res.post_bundle(self.resource_dir)
+                job.wait()
+                if not job.succeeded:
+                    self._infra_error = f"资源加载失败: {self.resource_dir}"
+                    raise InfraError(self._infra_error)
+                self._resource = res
+
+    @property
+    def controller(self) -> Any:
+        self._ensure_infra()
+        return self._controller
+
+    @property
+    def resource(self) -> Any:
+        self._ensure_infra()
+        return self._resource
+
+    def window_info(self) -> Dict[str, Any]:
+        title_re, class_re = self._window_regexes()
+        hit = find_game_window(title_re, class_re)
+        return {
+            "title_regex": title_re,
+            "class_regex": class_re,
+            "found": hit is not None,
+            "title": hit[1] if hit else None,
+            "class_name": hit[2] if hit else None,
+            "controller_ready": self._controller is not None,
+            "resource_ready": self._resource is not None,
+            "resource_dir": self.resource_dir,
+            "infra_error": self._infra_error or None,
+        }
+
+    # ---------------- session 管理 ----------------
+
+    def _new_tasker(self) -> Any:
+        if self.tasker_factory is not None:
+            return self.tasker_factory()
+        from maa.tasker import Tasker
+
+        return Tasker()
+
+    def create_session(self, name: str = "") -> Any:
+        from .session import Session
+
+        self._ensure_infra()
+        with self._lock:
+            self._seq += 1
+            sid = f"s{self._seq}"
+            s = Session(self, sid, name)
+            t = self._new_tasker()
+            if not t.bind(self._resource, self._controller):
+                raise InfraError(f"Tasker.bind 失败（session {sid}）")
+            s.tasker = t
+            self.sessions[sid] = s
+            return s
+
+    def get_session(self, session_id: str) -> Any:
+        s = self.sessions.get(session_id)
+        if s is None:
+            raise SessionNotFoundError(
+                f"session '{session_id}' 不存在（现有: {list(self.sessions) or '无'}）"
+            )
+        return s
+
+    def list_sessions(self) -> List[Dict[str, Any]]:
+        return [s.info(self._active_session == s.id) for s in self.sessions.values()]
+
+    def kill_session(self, session_id: str) -> Dict[str, Any]:
+        s = self.get_session(session_id)
+        stopped = False
+        if s.task_status().get("running"):
+            s.stop_task()
+            stopped = True
+            # 等 watcher 收尾（含释放活跃锁），最多 5s
+            for _ in range(100):
+                if not s.task_status().get("running"):
+                    break
+                time.sleep(0.05)
+        with self._lock:
+            if self._active_session == session_id:
+                self._active_session = None
+            self.sessions.pop(session_id, None)
+        return {"killed": session_id, "task_stopped": stopped}
+
+    # ---------------- 活跃锁 ----------------
+
+    @contextlib.contextmanager
+    def with_active(self, session: Any) -> Iterator[None]:
+        """互动操作互斥锁。session 重复获取允许（重入）。"""
+        with self._lock:
+            if self._active_session is None or self._active_session == session.id:
+                self._active_session = session.id
+            else:
+                raise ActiveLockError(self._active_session)
+        try:
+            yield
+        finally:
+            with self._lock:
+                if self._active_session == session.id:
+                    self._active_session = None
+
+    def release_active(self, session_id: str) -> None:
+        """任务 watcher 结束时调用（仅当仍是持有者）。"""
+        with self._lock:
+            if self._active_session == session_id:
+                self._active_session = None
+
+    def any_task_running(self) -> bool:
+        return any(s.task_status().get("running") for s in self.sessions.values())
+
+    # ---------------- 资源热更新 ----------------
+
+    def update_resources(self, files: Dict[str, str], reload: bool = True) -> Dict[str, Any]:
+        """写入文件并（可选）重载资源。files: {相对路径: base64}。"""
+        import base64
+
+        if self.any_task_running():
+            raise MaaMcpError("有任务正在运行，先 stop_task 再更新资源")
+
+        written: List[str] = []
+        for rel, b64 in files.items():
+            rel = rel.replace("\\", "/").lstrip("/")
+            target = os.path.normpath(os.path.join(self.resource_dir, rel))
+            if not target.startswith(os.path.normpath(self.resource_dir) + os.sep):
+                raise MaaMcpError(f"非法路径（越出 resource 目录）: {rel}")
+            data = base64.b64decode(b64)
+            os.makedirs(os.path.dirname(target) or self.resource_dir, exist_ok=True)
+            tmp = target + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, target)
+            written.append(rel)
+
+        reload_ok, nodes = None, None
+        if reload and written:
+            job = self.resource.post_bundle(self.resource_dir)
+            job.wait()
+            reload_ok = bool(job.succeeded)
+            try:
+                nodes = len(self.resource.get_node_list())
+            except Exception:
+                pass
+        return {"written": written, "reloaded": reload_ok, "node_count": nodes}
+
+    # ---------------- 截图 ----------------
+
+    def screencap(self) -> "object":
+        """截图，返回 BGR ndarray（失败抛 InfraError）。"""
+        try:
+            job = self.controller.post_screencap()
+            job.wait()
+            img = job.get()  # BGR ndarray
+            import numpy as np
+
+            if img is None or np.asarray(img).size == 0:
+                raise InfraError("截图为空（窗口最小化或截图方式不支持？可换 screencap 配置）")
+            return img
+        except MaaMcpError:
+            raise
+        except Exception as e:
+            raise InfraError(f"截图失败: {e}") from e

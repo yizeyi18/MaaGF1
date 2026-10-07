@@ -207,6 +207,15 @@ def main():
             print(f"Warning: failed to register state machine action: {e}")
             traceback.print_exc()
 
+        # 启动 MCP 远程控制服务器（守护线程；失败不影响主流程）
+        # 端点与 API Key 见启动日志与 agent/dist/maa_mcp.conf
+        try:
+            import maa_mcp.server as _mcp_server
+            _mcp_server.start_mcp_server(project_root, get_executable_dir())
+        except Exception as e:
+            print(f"Warning: MCP server failed to start: {e}")
+            traceback.print_exc()
+
         print("Starting to wait for connections...")
         
         # AgentServer.join() 将阻塞直到连接结束
