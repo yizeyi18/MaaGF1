@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import base64
 import copy
+import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -59,40 +61,44 @@ def tool_kill_session(hub: "object", session_id: str) -> Dict[str, Any]:
 
 
 def tool_list_windows(hub: "object", title_contains: str = "") -> Dict[str, Any]:
-    """诊断：列出所有顶层窗口（标题/类名/句柄/可见性）。"""
+    """诊断：列出框架 Toolkit 可见的顶层窗口（与 GUI 所见一致）+ 与当前正则的匹配结果。"""
     if os.name != "nt":
         raise MaaMcpError("仅 Windows 可用")
-    import ctypes
-    from ctypes import wintypes
+    from .hub import list_desktop_windows
 
-    user32 = ctypes.windll.user32
+    windows = list_desktop_windows()
+    if not windows:
+        raise MaaMcpError("Toolkit.find_desktop_windows() 返回空（框架未初始化？）")
+    title_re, class_re = hub._window_regexes()
+    try:
+        cre = re.compile(title_re, re.IGNORECASE)
+    except re.error:
+        cre = None
+
     out: List[Dict[str, Any]] = []
-
-    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    def _cb(hwnd, lparam):
-        try:
-            n = user32.GetWindowTextW(hwnd, None, 0)
-            buf = ctypes.create_unicode_buffer(max(n, 0) + 1)
-            user32.GetWindowTextW(hwnd, buf, max(n, 0) + 1)
-            title = buf.value
-            m = user32.GetClassNameW(hwnd, None, 0)
-            cbuf = ctypes.create_unicode_buffer(max(m, 0) + 1)
-            user32.GetClassNameW(hwnd, cbuf, max(m, 0) + 1)
-            if title:  # 只列有标题的窗口
-                if title_contains and title_contains.lower() not in title.lower():
-                    return True
-                out.append({
-                    "hwnd": int(hwnd),
-                    "title": title,
-                    "class": cbuf.value,
-                    "visible": bool(user32.IsWindowVisible(hwnd)),
-                })
-        except Exception:
-            pass
-        return True
-
-    user32.EnumWindows(_cb, 0)
-    return {"count": len(out), "windows": out}
+    for w in windows:
+        title = w["title"]
+        if not title:
+            continue
+        if title_contains and title_contains.lower() not in title.lower():
+            continue
+        match = bool(cre.search(title)) if cre else None
+        entry = {
+            "hwnd": w["hwnd"],
+            "title": title,
+            "class": w["class"],
+            "regex_match": match,
+        }
+        # 仅对匹配/疑似相关的窗口附 codepoints，抓 Unicode 同形字符
+        if match:
+            entry["title_codepoints"] = [f"U+{ord(c):04X}" for c in title[:20]]
+        out.append(entry)
+    return {
+        "total_windows_visible": len(windows),
+        "count": len(out),
+        "title_regex": title_re,
+        "windows": out,
+    }
 
 
 # ======================================================================================

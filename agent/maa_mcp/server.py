@@ -1,14 +1,25 @@
 """MCP HTTP 服务器（streamable-HTTP，Bearer API Key 鉴权）。
 
-在 agent 进程内以守护线程运行；启动失败不影响 agent 主流程。
+进程模型（重要）：
+- MCP 运行在**伴生进程**（maa_agent.exe --mcp，由 agent 主体自拉起），
+  因为 agent 主体是 AgentServer 模式，框架禁止在其中创建
+  Tasker/Controller/Resource（MaaAgentServer.dll 全是 NotImpl 桩）。
+  伴生进程只 import maa（不 import maa.agent）→ 完整框架模式。
+- agent 侧入口：spawn_mcp_coprocess()（清理旧实例 + 自拉起 + 等端口）。
+- 伴生进程入口：start_mcp_server()（主线程阻塞运行 uvicorn）。
 端点：<bind>:<port>/mcp
 """
 from __future__ import annotations
 
 import base64
-import threading
+import os
+import signal
+import socket
+import subprocess
+import sys
 import time
 import traceback
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .config import MaaMcpConfig, default_conf_path
@@ -18,8 +29,6 @@ from . import tools as T
 # 模块级单例（start_mcp_server 时赋值）
 HUB: Optional[GameHub] = None
 _CFG: Optional[MaaMcpConfig] = None
-_thread: Optional[threading.Thread] = None
-_started = False
 
 
 def call_tool(hub: GameHub, tool: str, **kwargs: Any) -> Tuple[Dict[str, Any], Optional[bytes]]:
@@ -285,60 +294,111 @@ def _log(msg: str, cfg_path: str = "") -> None:
             pass
 
 
-def start_mcp_server(project_root: str, executable_dir: str) -> bool:
-    """启动 MCP 服务器（守护线程）。返回是否启动成功。幂等。"""
-    global HUB, _CFG, _thread, _started
-    if _started:
-        return True
+def _wait_port(port: int, timeout_s: float = 30.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        time.sleep(0.5)
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _kill_stale_coprocess(executable_dir: str) -> None:
+    """终止上一实例伴生进程（上次残留 / GUI 重启后旧 agent 拉起的）。"""
+    pid_file = Path(executable_dir) / "maa_mcp.pid"
+    try:
+        if not pid_file.exists():
+            return
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except Exception:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except Exception:
+        pass
+
+
+def spawn_mcp_coprocess(project_root: str, executable_dir: str) -> bool:
+    """agent 侧入口：清理旧实例 → 自拉起 --mcp 伴生进程（同 exe）→ 等端口就绪。"""
+    conf_path = default_conf_path(executable_dir)
+    try:
+        cfg = MaaMcpConfig.load(conf_path)
+    except Exception:
+        cfg = None
+    if cfg is not None and not cfg.enable:
+        _log("MCP 已禁用（maa_mcp.conf enable=false），不启动伴生进程", conf_path)
+        return False
+    port = cfg.port if cfg is not None else 8180
+
+    _kill_stale_coprocess(executable_dir)
+
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--mcp", project_root, executable_dir]
+    else:  # 开发模式：python agent/main.py --mcp
+        main_py = Path(__file__).resolve().parent.parent / "main.py"
+        cmd = [sys.executable, str(main_py), "--mcp", project_root, executable_dir]
+
+    kwargs: Dict[str, Any] = {}
+    if os.name == "nt":
+        CREATE_NO_WINDOW = 0x08000000
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        kwargs["creationflags"] = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs)
+    except Exception as e:
+        _log(f"MCP 伴生进程拉起失败: {e}", conf_path)
+        return False
+
+    ok = _wait_port(port, timeout_s=45.0)
+    _log(f"MCP 伴生进程已拉起，端口 {'就绪' if ok else '未就绪（详情见 maa_mcp.log）'}: 127.0.0.1:{port}", conf_path)
+    return ok
+
+
+def start_mcp_server(project_root: str, executable_dir: str) -> int:
+    """伴生进程主流程（阻塞）：加载配置 → 构建应用 → 主线程运行 uvicorn。
+
+    必须在完整框架模式进程里运行（只 import maa，不 import maa.agent）。
+    """
+    global HUB, _CFG
     conf_path = default_conf_path(executable_dir)
     try:
         _CFG = MaaMcpConfig.load(conf_path)
     except Exception as e:
         _log(f"配置加载失败: {e}", conf_path)
-        traceback.print_exc()
-        return False
+        with open(conf_path + ".log", "a", encoding="utf-8") as f:
+            f.write(traceback.format_exc() + "\n")
+        return 1
     if not _CFG.enable:
         _log("已禁用（maa_mcp.conf enable=false）", conf_path)
-        return False
+        return 0
 
     HUB = GameHub(project_root, _CFG)
 
     try:
         app = _build_app(_CFG.api_key)
     except Exception as e:
-        _log(f"MCP 服务器构建失败（完整 traceback 见下）: {e}", conf_path)
+        _log(f"MCP 服务器构建失败: {e}", conf_path)
         with open(conf_path + ".log", "a", encoding="utf-8") as f:
             f.write(traceback.format_exc() + "\n")
-        return False
+        return 1
+
+    _log(f"MCP server 启动中: {_CFG.url} (bind={_CFG.bind}:{_CFG.port})", conf_path)
+    _log(f"API Key: {_CFG.api_key}", conf_path)
+    _log(f"配置文件: {conf_path}", conf_path)
+    _log(f"提示: 首次内网访问请在 Windows 防火墙弹窗中允许，或运行: "
+         f"netsh advfirewall firewall add rule name=MaaGF1-MCP dir=in action=allow "
+         f"protocol=TCP localport={_CFG.port}", conf_path)
 
     import uvicorn
 
-    config = uvicorn.Config(app, host=_CFG.bind, port=_CFG.port, log_level="warning")
-    uv_server = uvicorn.Server(config)
-    _thread = threading.Thread(target=uv_server.run, daemon=True, name="maa-mcp-http")
-    _thread.start()
-    _started = True
-    # 验证端口真正 listen（bind 失败如端口占用时，线程会静默退出）
-    import socket
-
-    ok = False
-    for _ in range(40):
-        time.sleep(0.25)
-        if not _thread.is_alive():
-            break
-        try:
-            with socket.create_connection(("127.0.0.1", _CFG.port), timeout=1):
-                ok = True
-                break
-        except OSError:
-            continue
-    if ok:
-        _log(f"MCP server 已启动: {_CFG.url} (bind={_CFG.bind}:{_CFG.port})", conf_path)
-        _log(f"API Key: {_CFG.api_key}", conf_path)
-        _log(f"配置文件: {conf_path}", conf_path)
-        _log(f"提示: 首次内网访问请在 Windows 防火墙弹窗中允许，或运行: "
-             f"netsh advfirewall firewall add rule name=MaaGF1-MCP dir=in action=allow "
-             f"protocol=TCP localport={_CFG.port}", conf_path)
-    else:
-        _log(f"MCP server 启动失败: 线程已退出或端口 {_CFG.port} 未监听（可能被占用）", conf_path)
-    return ok
+    uvicorn.run(app, host=_CFG.bind, port=_CFG.port, log_level="warning")
+    return 0

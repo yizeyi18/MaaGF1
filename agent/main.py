@@ -119,6 +119,21 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 
+# --mcp 模式：MCP 伴生进程入口。
+# 必须在本进程 import maa.agent 之前分支出去：伴生进程只 import maa
+# （完整框架模式），才能创建 Tasker/Controller/Resource/Toolkit。
+# 由 agent 主体通过 maa_mcp.server.spawn_mcp_coprocess() 自拉起。
+if "--mcp" in sys.argv:
+    try:
+        from maa_mcp.mcp_main import mcp_coprocess_main
+        sys.exit(mcp_coprocess_main(project_root, get_executable_dir()))
+    except SystemExit:
+        raise
+    except Exception:
+        print("MCP coprocess failed:")
+        traceback.print_exc()
+        sys.exit(1)
+
 # 导入 maa 模块
 try:
     print("Starting to import MaaFramework modules...")
@@ -207,13 +222,15 @@ def main():
             print(f"Warning: failed to register state machine action: {e}")
             traceback.print_exc()
 
-        # 启动 MCP 远程控制服务器（守护线程；失败不影响主流程）
-        # 端点与 API Key 见启动日志与 agent/dist/maa_mcp.conf
+        # 启动 MCP 远程控制（伴生进程，完整框架模式；失败不影响主流程）。
+        # 不能在本进程内跑：本进程是 AgentServer 模式，框架禁止在其中
+        # 创建 Tasker/Controller/Resource。端点与 API Key 见
+        # agent/dist/maa_mcp.conf 与 maa_mcp.log。
         try:
-            import maa_mcp.server as _mcp_server
-            _mcp_server.start_mcp_server(project_root, get_executable_dir())
+            from maa_mcp.server import spawn_mcp_coprocess
+            spawn_mcp_coprocess(project_root, get_executable_dir())
         except Exception as e:
-            print(f"Warning: MCP server failed to start: {e}")
+            print(f"Warning: MCP coprocess failed to spawn: {e}")
             traceback.print_exc()
 
         print("Starting to wait for connections...")

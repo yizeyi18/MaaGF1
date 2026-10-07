@@ -1,6 +1,6 @@
 """GameHub —— MCP 侧的游戏基础设施与 session 管理。
 
-- 窗口发现：EnumWindows + 正则（来自 interface.json 的 controller 配置）
+- 窗口发现：框架 Toolkit.find_desktop_windows() + 正则（正则来自 interface.json 的 controller 配置）
 - 共享 Controller（Win32）与 Resource（bundle = resource 目录）
 - Session 创建/列出/终止；全局"活跃锁"：同一时间只有一个 session
   能执行互动操作（点击/滑动/含动作的任务）——游戏进程同一机器只有一个
@@ -43,39 +43,42 @@ class InfraError(MaaMcpError):
 # ======================================================================================
 
 def find_game_window(title_regex: str, class_regex: str = "") -> Optional[Tuple[int, str, str]]:
-    """按标题/类名正则查找游戏窗口。返回 (handle, title, class_name)。"""
+    """按标题/类名正则查找游戏窗口。返回 (handle, title, class_name)。
+
+    复用框架 Toolkit.find_desktop_windows()（MaaToolkit C++ 实现，
+    与 GUI 的窗口发现走同一代码路径），不再自己 ctypes EnumWindows。
+    """
     if os.name != "nt":
         return None
-    import ctypes
-    from ctypes import wintypes
+    try:
+        from maa.toolkit import Toolkit
+        windows = Toolkit.find_desktop_windows()
+    except Exception:
+        return None
+    for w in windows:
+        title = w.window_name or ""
+        if not title:
+            continue
+        if re.search(title_regex, title, re.IGNORECASE) and (
+            not class_regex or re.search(class_regex, w.class_name or "")
+        ):
+            return (int(w.hwnd), title, w.class_name or "")
+    return None
 
-    user32 = ctypes.windll.user32
 
-    found: List[Tuple[int, str, str]] = []
-
-    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    def _enum_cb(hwnd, lparam):
-        try:
-            n = user32.GetWindowTextW(hwnd, None, 0)
-            if n <= 0:
-                return True
-            buf = ctypes.create_unicode_buffer(n + 1)
-            user32.GetWindowTextW(hwnd, buf, n + 1)
-            title = buf.value
-            m = user32.GetClassNameW(hwnd, None, 0)
-            cls_buf = ctypes.create_unicode_buffer(m + 1)
-            user32.GetClassNameW(hwnd, cls_buf, m + 1)
-            cls = cls_buf.value
-            if re.search(title_regex, title, re.IGNORECASE) and (
-                not class_regex or re.search(class_regex, cls)
-            ):
-                found.append((hwnd, title, cls))
-        except Exception:
-            pass
-        return True
-
-    user32.EnumWindows(_enum_cb, 0)
-    return found[0] if found else None
+def list_desktop_windows() -> List[Dict[str, Any]]:
+    """框架 Toolkit 的顶层窗口列表（诊断用，与 GUI 所见一致）。"""
+    if os.name != "nt":
+        return []
+    try:
+        from maa.toolkit import Toolkit
+        windows = Toolkit.find_desktop_windows()
+    except Exception:
+        return []
+    return [
+        {"hwnd": int(w.hwnd), "title": w.window_name or "", "class": w.class_name or ""}
+        for w in windows
+    ]
 
 
 # ======================================================================================
@@ -136,6 +139,13 @@ class GameHub:
         return title, cls
 
     def _ensure_infra(self) -> None:
+        """确保 controller/resource 就绪。
+
+        只有"绑定不可用"这类永久错误才 latch 到 _infra_error；
+        窗口未找到/控制器创建失败/资源加载失败都是瞬态的，
+        每次调用都重新尝试（游戏可能在 agent 启动之后才打开）。
+        _last_error 仅供展示（window_info），不参与 latch。
+        """
         with self._lock:
             if self._controller is not None and self._resource is not None:
                 return
@@ -152,11 +162,12 @@ class GameHub:
                 title_re, class_re = self._window_regexes()
                 hit = find_game_window(title_re, class_re)
                 if hit is None:
-                    self._infra_error = (
+                    self._last_error = (
                         f"找不到游戏窗口（title~'{title_re}' class~'{class_re or '.*'}'）。"
                         f"请确认游戏已启动，或修改 maa_mcp.conf 的 window_title_regex。"
+                        f"（可用 list_windows 诊断）"
                     )
-                    raise InfraError(self._infra_error)
+                    raise InfraError(self._last_error)
                 h, title, cls = hit
                 try:
                     self._controller = Win32Controller(
@@ -166,17 +177,18 @@ class GameHub:
                         keyboard_method=int(self.controller_cfg.get("keyboard", 1)),
                     )
                 except Exception as e:
-                    self._infra_error = f"Win32Controller 创建失败: {e}"
-                    raise InfraError(self._infra_error) from e
+                    self._last_error = f"Win32Controller 创建失败: {e}"
+                    raise InfraError(self._last_error) from e
 
             if self._resource is None:
                 res = Resource()
                 job = res.post_bundle(self.resource_dir)
                 job.wait()
                 if not job.succeeded:
-                    self._infra_error = f"资源加载失败: {self.resource_dir}"
-                    raise InfraError(self._infra_error)
+                    self._last_error = f"资源加载失败: {self.resource_dir}"
+                    raise InfraError(self._last_error)
                 self._resource = res
+                self._last_error = ""
 
     @property
     def controller(self) -> Any:
