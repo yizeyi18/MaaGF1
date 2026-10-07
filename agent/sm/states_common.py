@@ -6,9 +6,9 @@
     └── 三级页面：工厂内子项、战斗内选关卡、仓库内筛选 等
     （仓库 / 梯队编成 可从多场景跳入 —— 它们是独立状态，允许多条转移边汇入）
 
-v1 现状：8-1N 流只用到其中少数状态；其余状态先声明骨架（检查节点指向
-pipeline/state_machine/common_st.json，图片未齐前标记为缺失占位），
-后续任务流化时逐步补齐。
+v1 现状：8-1N 流用到 stage_list/stage_detail/formation/charselect 族；
+main 已可用（'战斗'按钮双模板）；据点/研发/工厂/仓库等其余状态在
+后续任务流化时逐个补齐（检查节点放 pipeline/state_machine/common_st.json）。
 """
 from __future__ import annotations
 
@@ -16,10 +16,13 @@ from .core import CheckSpec, State
 
 # ---------------- 界面状态（通用） ----------------
 
-#: 主界面。检查节点 SM_main_check 为占位（图片缺失，见 sm/missing.py）。
+#: 主界面（根状态）。检查 = 主界面'战斗'按钮 图标+文字 双模板：
+#: 节点 SM_main_battle_icon / SM_main_battle_text（common_st.json），
+#: 模板在 assets/resource/image/common/，裁剪自 1280x720 主界面截图，
+#: 避开了随活动变化的'活动'角标。
 S_MAIN = State(
     name="main",
-    checks=[CheckSpec("SM_main_check")],
+    checks=[CheckSpec("SM_main_battle_icon"), CheckSpec("SM_main_battle_text")],
     desc="主界面（根状态）",
     locate_priority=500,
 )
