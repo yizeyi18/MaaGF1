@@ -29,20 +29,22 @@ from sm.missing import describe_missing, is_missing
 
 
 def _reco_param_classes() -> Dict[str, type]:
+    """识别类型 → 参数 dataclass。动态探测：不同 MaaFramework 版本
+    （如 5.2.6 无 JAnd/JOr，新版有）暴露的 dataclass 集合不同，
+    只注册当前版本真实存在的类。"""
     from maa import pipeline as _p
 
-    return {
-        "DirectHit": _p.JDirectHit,
-        "TemplateMatch": _p.JTemplateMatch,
-        "FeatureMatch": _p.JFeatureMatch,
-        "ColorMatch": _p.JColorMatch,
-        "OCR": _p.JOCR,
-        "NeuralNetworkClassify": _p.JNeuralNetworkClassify,
-        "NeuralNetworkDetect": _p.JNeuralNetworkDetect,
-        "CustomRecognition": _p.JCustomRecognition,
-        "And": _p.JAnd,
-        "Or": _p.JOr,
-    }
+    names = (
+        "DirectHit", "TemplateMatch", "FeatureMatch", "ColorMatch", "OCR",
+        "NeuralNetworkClassify", "NeuralNetworkDetect", "CustomRecognition",
+        "And", "Or",
+    )
+    out: Dict[str, type] = {}
+    for n in names:
+        cls = getattr(_p, f"J{n}", None)
+        if cls is not None:
+            out[n] = cls
+    return out
 
 
 def node_to_reco(node_data: Dict) -> Tuple[str, "object"]:

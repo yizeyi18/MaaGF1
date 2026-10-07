@@ -76,7 +76,16 @@ class MaaBridge(SMContext):
         try:
             job = self._ctrl.post_screencap()
             job.wait()
-            return job.get()  # BGR ndarray
+            img = job.get()  # BGR(A) ndarray
+            import numpy as np
+
+            img = np.asarray(img)
+            if img.ndim == 3 and img.shape[2] == 4:
+                # Win32 PrintWindow 捕获是 CV_8UC4(BGRA)，而 Python 绑定
+                # ImageBuffer.set 硬编码 CV_8UC3——4 通道直接传给
+                # run_recognition 会误读行数据。统一转 3 通道 BGR。
+                img = np.ascontiguousarray(img[:, :, :3])
+            return img
         except Exception as e:
             raise SMError(f"截图失败（框架/连接异常）: {e}") from e
 

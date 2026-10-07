@@ -339,15 +339,25 @@ class GameHub:
     # ---------------- 截图 ----------------
 
     def screencap(self) -> "object":
-        """截图，返回 BGR ndarray（失败抛 InfraError）。"""
+        """截图，返回 3 通道 BGR ndarray（失败抛 InfraError）。
+
+        注意：Win32 PrintWindow 捕获产出 CV_8UC4（BGRA），而 Python 绑定的
+        ImageBuffer.set 硬编码 CV_8UC3——4 通道数据直接传给
+        post_recognition/post_task 会按 3 通道误读行数据（OCR/匹配全废）。
+        这里统一转成 3 通道 BGR，与框架 C++ 内部管线一致。
+        """
         try:
             job = self.controller.post_screencap()
             job.wait()
-            img = job.get()  # BGR ndarray
+            img = job.get()  # BGR(A) ndarray
             import numpy as np
 
-            if img is None or np.asarray(img).size == 0:
+            img = np.asarray(img)
+            if img.size == 0:
                 raise InfraError("截图为空（窗口最小化或截图方式不支持？可换 screencap 配置）")
+            if img.ndim == 3 and img.shape[2] == 4:
+                img = img[:, :, :3]  # BGRA → BGR
+                img = np.ascontiguousarray(img)
             return img
         except MaaMcpError:
             raise
