@@ -44,8 +44,9 @@ def _active_id(hub: "object") -> Optional[str]:
         return hub._active_session
 
 
-def tool_list_sessions(hub: "object") -> List[Dict[str, Any]]:
-    return hub.list_sessions()
+def tool_list_sessions(hub: "object") -> Dict[str, Any]:
+    # 包一层 dict：MCP SDK 会把裸 list 拆成多个内容块，dict 才是单个 JSON 文本块
+    return {"sessions": hub.list_sessions()}
 
 
 def tool_create_session(hub: "object", name: str = "") -> Dict[str, Any]:
@@ -332,7 +333,7 @@ def tool_run_script(hub: "object", session_id: str, script: Dict[str, Any],
 # 内置成套任务
 # ======================================================================================
 
-def tool_list_tasks(hub: "object") -> List[Dict[str, Any]]:
+def tool_list_tasks(hub: "object") -> Dict[str, Any]:
     tasks = hub.interface.get("task") or []
     out = []
     for t in tasks:
@@ -345,7 +346,7 @@ def tool_list_tasks(hub: "object") -> List[Dict[str, Any]]:
             "repeatable": t.get("repeatable", False),
             "check": t.get("check", False),
         })
-    return out
+    return {"tasks": out}
 
 
 def tool_run_task(hub: "object", session_id: str, task: str,

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import threading
+import time
 import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -264,19 +265,34 @@ def _build_app(api_key: str, stateless: bool = True) -> "object":
     return app
 
 
+def _log(msg: str, cfg_path: str = "") -> None:
+    """同时输出到控制台与 maa_mcp.log（GUI 启动的 agent 没有控制台，日志必须落盘）。"""
+    import time
+
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    print(line)
+    if cfg_path:
+        try:
+            with open(cfg_path + ".log", "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+
 def start_mcp_server(project_root: str, executable_dir: str) -> bool:
     """启动 MCP 服务器（守护线程）。返回是否启动成功。幂等。"""
     global HUB, _CFG, _thread, _started
     if _started:
         return True
+    conf_path = default_conf_path(executable_dir)
     try:
-        _CFG = MaaMcpConfig.load(default_conf_path(executable_dir))
+        _CFG = MaaMcpConfig.load(conf_path)
     except Exception as e:
-        print(f"[maa_mcp] 配置加载失败: {e}")
+        _log(f"配置加载失败: {e}", conf_path)
         traceback.print_exc()
         return False
     if not _CFG.enable:
-        print("[maa_mcp] 已禁用（maa_mcp.conf enable=false）")
+        _log("已禁用（maa_mcp.conf enable=false）", conf_path)
         return False
 
     HUB = GameHub(project_root, _CFG)
@@ -284,8 +300,9 @@ def start_mcp_server(project_root: str, executable_dir: str) -> bool:
     try:
         app = _build_app(_CFG.api_key)
     except Exception as e:
-        print(f"[maa_mcp] MCP 服务器构建失败（需要 pip install mcp，且仅 Windows 测试机可运行）: {e}")
-        traceback.print_exc()
+        _log(f"MCP 服务器构建失败（完整 traceback 见下）: {e}", conf_path)
+        with open(conf_path + ".log", "a", encoding="utf-8") as f:
+            f.write(traceback.format_exc() + "\n")
         return False
 
     import uvicorn
@@ -295,7 +312,27 @@ def start_mcp_server(project_root: str, executable_dir: str) -> bool:
     _thread = threading.Thread(target=uv_server.run, daemon=True, name="maa-mcp-http")
     _thread.start()
     _started = True
-    print(f"[maa_mcp] MCP server 已启动: {_CFG.url} (bind={_CFG.bind}:{_CFG.port})")
-    print(f"[maa_mcp] API Key: {_CFG.api_key}")
-    print(f"[maa_mcp] 配置文件: {_CFG._path}")
-    return True
+    # 验证端口真正 listen（bind 失败如端口占用时，线程会静默退出）
+    import socket
+
+    ok = False
+    for _ in range(40):
+        time.sleep(0.25)
+        if not _thread.is_alive():
+            break
+        try:
+            with socket.create_connection(("127.0.0.1", _CFG.port), timeout=1):
+                ok = True
+                break
+        except OSError:
+            continue
+    if ok:
+        _log(f"MCP server 已启动: {_CFG.url} (bind={_CFG.bind}:{_CFG.port})", conf_path)
+        _log(f"API Key: {_CFG.api_key}", conf_path)
+        _log(f"配置文件: {conf_path}", conf_path)
+        _log(f"提示: 首次内网访问请在 Windows 防火墙弹窗中允许，或运行: "
+             f"netsh advfirewall firewall add rule name=MaaGF1-MCP dir=in action=allow "
+             f"protocol=TCP localport={_CFG.port}", conf_path)
+    else:
+        _log(f"MCP server 启动失败: 线程已退出或端口 {_CFG.port} 未监听（可能被占用）", conf_path)
+    return ok
