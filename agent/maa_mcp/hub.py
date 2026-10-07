@@ -102,6 +102,7 @@ class GameHub:
         self._controller = None
         self._resource = None
         self._infra_error = ""
+        self._last_error = ""
         # Tasker 工厂（默认 maa.tasker.Tasker；可注入，便于测试/扩展）
         self.tasker_factory: "object" = None
 
@@ -181,8 +182,8 @@ class GameHub:
                     # （"Failed to get cached image."）。
                     conn = self._controller.post_connection()
                     conn.wait()
-                    if not self._controller.connected():
-                        raise RuntimeError(f"controller 连接后 connected()=False (hwnd={h})")
+                    if not self._controller.connected:  # property，非方法
+                        raise RuntimeError(f"controller 连接后 connected=False (hwnd={h})")
                 except Exception as e:
                     self._controller = None  # 未连接成功，下次重新发现+重建
                     self._last_error = f"Win32Controller 创建/连接失败: {e}"
@@ -220,7 +221,7 @@ class GameHub:
             "controller_ready": self._controller is not None,
             "resource_ready": self._resource is not None,
             "resource_dir": self.resource_dir,
-            "infra_error": self._infra_error or None,
+            "infra_error": self._infra_error or self._last_error or None,
         }
 
     # ---------------- session 管理 ----------------
