@@ -176,8 +176,16 @@ class GameHub:
                         mouse_method=int(self.controller_cfg.get("mouse", 1)),
                         keyboard_method=int(self.controller_cfg.get("keyboard", 1)),
                     )
+                    # 连接（link）控制器——GUI 的 LinkStart() 即此 C API
+                    # （MaaControllerPostConnection）。不连接则截图缓存为空
+                    # （"Failed to get cached image."）。
+                    conn = self._controller.post_connection()
+                    conn.wait()
+                    if not self._controller.connected():
+                        raise RuntimeError(f"controller 连接后 connected()=False (hwnd={h})")
                 except Exception as e:
-                    self._last_error = f"Win32Controller 创建失败: {e}"
+                    self._controller = None  # 未连接成功，下次重新发现+重建
+                    self._last_error = f"Win32Controller 创建/连接失败: {e}"
                     raise InfraError(self._last_error) from e
 
             if self._resource is None:
