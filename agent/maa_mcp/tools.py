@@ -157,64 +157,75 @@ def tool_screenshot(hub: "object", session_id: str = "", roi: Optional[List[int]
     return meta, png
 
 
-def _recognize_on(hub: "object", s: "object", node: str, image: "object") -> "object":
-    """按节点名识别（节点必须已加载在 hub.resource 里）。"""
-    node_data = hub.resource.get_node_data(node)
-    if node_data is None:
-        raise MaaMcpError(f"识别节点不存在: {node}")
-    from .bridge import node_to_reco
+def _run_node_recognition(hub: "object", s: "object", node_data: Dict[str, Any], tag: str) -> "object":
+    """框架原生单节点识别：注入临时节点（只留 recognition、next 置空），
+    由框架内部截图 + 识别（C++ 原生路径，正确处理 4 通道捕获），
+    Python 侧不经过图像回灌（避免绑定 ImageBuffer.set 只收 3 通道的问题）。
 
-    rtype, param = node_to_reco(node_data)
-    job = s.tasker.post_recognition(rtype, param, image)
+    返回 RecognitionDetail。
+    """
+    entry = f"__mcp_{s.id}_{tag}"
+    node = {"recognition": node_data["recognition"], "next": []}
+    job = s.tasker.post_task(entry, pipeline_override={entry: node})
     job.wait()
-    return s.tasker.get_recognition_detail(job.job_id)
+    if not job.succeeded:
+        raise MaaMcpError(f"识别任务失败: {entry}（检查窗口/控制器状态，get_info 可诊断）")
+    nd = s.tasker.get_latest_node(entry)
+    if nd is None or nd.recognition is None:
+        raise MaaMcpError(f"识别未返回结果: {entry}")
+    return nd.recognition
 
 
 def tool_ocr(hub: "object", session_id: str = "", roi: Optional[List[int]] = None,
              expected: Optional[List[str]] = None, node: str = "") -> Dict[str, Any]:
-    """OCR。node 非空时用指定节点（含其 roi/expected）；否则用临时参数（全图或给定 roi）。"""
+    """OCR（框架原生：框架内部截图+识别）。node 非空时用指定节点（含其 roi/expected）；
+    否则用临时参数（全图或给定 roi）。"""
     s = _resolve_session(hub, session_id)
-    img = hub.screencap()
     if node:
-        detail = _recognize_on(hub, s, node, img)
-        rtype = "OCR"
+        node_data = hub.resource.get_node_data(node)
+        if node_data is None:
+            raise MaaMcpError(f"识别节点不存在: {node}")
+        detail = _run_node_recognition(hub, s, node_data, "ocr")
     else:
-        from maa.pipeline import JOCR
-
-        param = JOCR(expected=expected or [], roi=tuple(roi) if roi else (0, 0, 0, 0))
-        job = s.tasker.post_recognition("OCR", param, img)
-        job.wait()
-        detail = s.tasker.get_recognition_detail(job.job_id)
-        rtype = "OCR"
+        reco = {
+            "type": "OCR",
+            "param": {
+                "expected": expected or [],
+                "roi": list(roi) if roi else [0, 0, 0, 0],
+            },
+        }
+        detail = _run_node_recognition(hub, s, {"recognition": reco}, "ocr")
     return _detail_to_dict(detail)
 
 
 def tool_match(hub: "object", session_id: str = "", node: str = "",
                template: str = "", roi: Optional[List[int]] = None,
                threshold: float = 0.8) -> Dict[str, Any]:
-    """模板匹配。node 用已加载节点；template 用 resource 目录下相对路径（可先 update_resources 推送）。"""
+    """模板匹配（框架原生：框架内部截图+识别）。node 用已加载节点；
+    template 用 resource/image 下相对路径（可先 update_resources 推送）。"""
     s = _resolve_session(hub, session_id)
-    img = hub.screencap()
     if node:
-        detail = _recognize_on(hub, s, node, img)
+        node_data = hub.resource.get_node_data(node)
+        if node_data is None:
+            raise MaaMcpError(f"识别节点不存在: {node}")
+        detail = _run_node_recognition(hub, s, node_data, "match")
     elif template:
         import os
-
-        from maa.pipeline import JTemplateMatch
 
         tpath = os.path.join(hub.resource_dir, "image", template.lstrip("/"))
         if not os.path.isfile(tpath):
             raise MaaMcpError(f"模板文件不存在: {tpath}（路径相对 resource/image/）")
-        # 相对 resource 根的路径才是模板名
+        # 相对 resource/image 的路径才是模板名
         rel = os.path.relpath(tpath, os.path.join(hub.resource_dir, "image"))
-        param = JTemplateMatch(
-            template=[rel],
-            roi=tuple(roi) if roi else (0, 0, 0, 0),
-            threshold=[float(threshold)],
-        )
-        job = s.tasker.post_recognition("TemplateMatch", param, img)
-        job.wait()
-        detail = s.tasker.get_recognition_detail(job.job_id)
+        reco = {
+            "type": "TemplateMatch",
+            "param": {
+                "template": [rel],
+                "roi": list(roi) if roi else [0, 0, 0, 0],
+                "threshold": [float(threshold)],
+            },
+        }
+        detail = _run_node_recognition(hub, s, {"recognition": reco}, "match")
     else:
         raise MaaMcpError("必须指定 node 或 template")
     return _detail_to_dict(detail)

@@ -16,6 +16,8 @@ import threading
 import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+import numpy as np
+
 
 class MaaMcpError(Exception):
     """MCP 侧业务错误（工具层会转成结构化错误返回）。"""
@@ -339,27 +341,31 @@ class GameHub:
     # ---------------- 截图 ----------------
 
     def screencap(self) -> "object":
-        """截图，返回 3 通道 BGR ndarray（失败抛 InfraError）。
+        """截图，返回控制器原始输出（Win32 PrintWindow 为 BGRA 4 通道）。
 
-        注意：Win32 PrintWindow 捕获产出 CV_8UC4（BGRA），而 Python 绑定的
-        ImageBuffer.set 硬编码 CV_8UC3——4 通道数据直接传给
-        post_recognition/post_task 会按 3 通道误读行数据（OCR/匹配全废）。
-        这里统一转成 3 通道 BGR，与框架 C++ 内部管线一致。
+        注意：不要把这张图直接回灌给 Python 绑定的 post_recognition /
+        run_recognition——ImageBuffer.set 硬编码 CV_8UC3，4 通道会误读
+        （上游 MaaFramework 的既有行为）。回灌前先 to_bgr()；
+        一次性识别优先走框架原生路径（post_task 内部截图，见 tools）。
         """
         try:
             job = self.controller.post_screencap()
             job.wait()
-            img = job.get()  # BGR(A) ndarray
-            import numpy as np
-
-            img = np.asarray(img)
+            img = np.asarray(job.get())
             if img.size == 0:
                 raise InfraError("截图为空（窗口最小化或截图方式不支持？可换 screencap 配置）")
-            if img.ndim == 3 and img.shape[2] == 4:
-                img = img[:, :, :3]  # BGRA → BGR
-                img = np.ascontiguousarray(img)
             return img
         except MaaMcpError:
             raise
         except Exception as e:
             raise InfraError(f"截图失败: {e}") from e
+
+    @staticmethod
+    def to_bgr(img) -> "object":
+        """BGRA(4 通道) → BGR(3 通道)，供 Python 绑定回灌识别（post_recognition
+        / run_recognition 的 ImageBuffer.set 只接受 3 通道输入）。
+        已是 3 通道的原样返回（保证 contiguous）。"""
+        img = np.asarray(img)
+        if img.ndim == 3 and img.shape[2] == 4:
+            return np.ascontiguousarray(img[:, :, :3])
+        return np.ascontiguousarray(img)

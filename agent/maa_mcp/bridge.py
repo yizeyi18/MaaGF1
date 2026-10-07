@@ -138,7 +138,9 @@ class TaskerBridge(SMContext):
         if node_data is None:
             raise SMError(f"识别节点不存在: {node}（资源未加载或节点名错误）")
         rtype, param = node_to_reco(node_data)
-        job = self._tasker.post_recognition(rtype, param, image)
+        # post_recognition 的图像入口只接受 3 通道（上游绑定的
+        # ImageBuffer.set 硬编码 CV_8UC3）；控制器原始截图是 4 通道 BGRA。
+        job = self._tasker.post_recognition(rtype, param, self._hub.to_bgr(image))
         job.wait()
         try:
             # 识别任务的 taskid 即 reco_id
