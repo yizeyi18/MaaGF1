@@ -27,6 +27,7 @@ _mcp_pkgs = [
     'opentelemetry',               # mcp.shared._otel 无条件导入（opentelemetry-api）
 ]
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_submodules
 
 
 def _collect(pkg):
@@ -89,24 +90,15 @@ a = Analysis(
     # 只冻结第三方依赖：maa 全家桶 + MCP 服务器栈（_extra_hidden）+ numpy/requests。
     # 一方代码（main/my_reco/action/utils/sm/maa_mcp）不进 PYZ——
     # 以源码形式分发在 <project>/agent/src/，bootstrap 运行时动态导入。
+    #
+    # maa 必须 collect_submodules 全量收集：bootstrap 设计下 PyInstaller
+    # 无法静态追踪磁盘上一方代码的 import（旧 spec 靠 main.py 入口追踪
+    # 才能自动收全 maa.*），手写清单已漏掉 maa.custom_recognition
+    # 导致线上 ModuleNotFoundError。全量收集一劳永逸。
     hiddenimports=[
-        'maa',
-        'maa.agent.agent_server',
-        'maa.toolkit',
-        'maa.controller',
-        'maa.resource',
-        'maa.tasker',
-        'maa.pipeline',
-        'maa.context',
-        'maa.job',
-        'maa.buffer',
-        'maa.define',
-        'maa.event_sink',
-        'maa.custom_action',
-        'maa.library',
         'numpy',
         'requests',
-    ] + _extra_hidden,
+    ] + collect_submodules('maa') + _extra_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
