@@ -309,6 +309,20 @@ class Runner:
                 time.sleep(t.retry_wait_ms / 1000.0)
                 continue
 
+            # 幂等守卫：已在目标态就不重执行动作。上一次动作可能已生效、
+            # 只是复检识别漏判触发了重试——此时再点一次会把 toggle 型
+            # 控件关回去（实测：8-1N 面板打开后二次点击入口会关掉面板）。
+            # 判定必须用【目标状态的完整检查集 + 转移 post_check】，
+            # 不能用弱 post_check 子集：T_battle_popup_supply__battle 的
+            # post_check 只有 [SM81N_battle]，而补给弹窗盖在战斗屏上时
+            # SM81N_battle 仍命中——弱子集会把"弹窗还开着"误判成
+            # "已在 battle"，跳过关弹窗动作（集成测试复现过）。
+            target_state = self._require_state(t.to_state)
+            guard_specs = list(target_state.checks) + list(t.post_check or [])
+            if guard_specs and self._specs_pass(self._check_specs(guard_specs, image)):
+                self._log("INFO", f"转移 {t.name}: 动作前已在目标态，跳过动作")
+                return
+
             try:
                 for action in t.actions:
                     self._abort_if_stopped()
@@ -323,18 +337,19 @@ class Runner:
                 time.sleep(t.post_wait_ms / 1000.0)
 
             # 转移后状态检查（需求：每次转移必配一次状态检查）。
-            # 先"延迟复检"（给 UI 动画/识别留时间）再考虑重新执行动作：
-            # 重新点击可能触发 toggle（如计划格选/取消），能少点就少点。
+            # 先"延迟复检"（给 UI 动画/识别留时间）再考虑重新执行动作；
+            # 若动作实际已生效但本轮复检仍漏判，下一轮循环顶部的幂等
+            # 守卫会在重执行动作前兜住（防 toggle 重点击）。
             passed = False
             image = None
-            for _ in range(3):
+            for _ in range(5):
                 image = self.ctx.screenshot()
                 results = self._check_specs(t.post_check, image)
                 if self._specs_pass(results):
                     passed = True
                     break
                 self._abort_if_stopped()
-                time.sleep(max(t.retry_wait_ms, 300) / 2000.0)
+                time.sleep(0.4)
             if passed:
                 self._log("INFO", f"转移成功: {t.name} (第{attempt}次)")
                 return

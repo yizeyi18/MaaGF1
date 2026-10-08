@@ -28,9 +28,12 @@ S_MAIN = State(
 )
 
 #: 战斗-关卡选择列表页（含 8-1N 入口按钮）
+#: 注意：8-1N 面板打开时，列表按钮只是被遮罩变暗，模板仍稳定命中
+#: （实测 0.942），会把 stage_detail 遮蔽掉——必须配反向检查排除。
 S_STAGE_LIST = State(
     name="stage_list",
-    checks=[CheckSpec("SM81N_stage_list")],
+    checks=[CheckSpec("SM81N_stage_list"),
+            CheckSpec("SM81N_stage_detail", inverted=True)],
     desc="战斗关卡选择列表（可见 8-1N 入口按钮）",
     locate_priority=10,
 )

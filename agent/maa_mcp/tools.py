@@ -446,9 +446,17 @@ def _box_to_list(box: Optional["object"]) -> Optional[List[int]]:
 # ======================================================================================
 
 def tool_click(hub: "object", session_id: str, x: int, y: int, contact: int = 0) -> Dict[str, Any]:
+    # 注意：绑定 post_click 签名是 (x, y)——没有 contact 参数！
+    # 非左键（contact!=0）必须走 post_touch_down/up（V2 API）。
+    # 曾传 contact= 关键字 → TypeError 被吞，点击静默失效（实测）。
     s = _resolve_session(hub, session_id)
     with hub.with_active(s):
-        hub.controller.post_click(int(x), int(y), contact=int(contact)).wait()
+        c = hub.controller
+        if int(contact) == 0:
+            c.post_click(int(x), int(y)).wait()
+        else:
+            c.post_touch_down(int(x), int(y), contact=int(contact), pressure=1).wait()
+            c.post_touch_up(contact=int(contact)).wait()
     return {"clicked": [int(x), int(y)], "contact": int(contact), "session": s.id}
 
 
