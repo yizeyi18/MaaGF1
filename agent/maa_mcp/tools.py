@@ -260,21 +260,33 @@ def _run_node_recognition(hub: "object", s: "object", node_data: Dict[str, Any],
     返回 RecognitionDetail。
     """
     entry = f"__mcp_{s.id}_{tag}"
+    # 注意：节点级识别超时的 JSON key 是 "timeout"（协议 v5.1，默认 20000ms，
+    # -1 无限）——C++ 内部成员叫 reco_timeout，但解析器读的是 "timeout"。
     node = {"recognition": node_data["recognition"], "next": [],
-            "reco_timeout": 3000}  # 未命中重试窗口：默认 20s 太长，3s 足够判定
+            "timeout": 3000}  # 未命中重试窗口：默认 20s 太长，3s 足够判定
     job = s.tasker.post_task(entry, pipeline_override={entry: node})
     job.wait()
-    if not job.succeeded:
-        # MAA 对"入口节点未命中"的标准行为是重试到 reco_timeout 后任务失败。
-        # 识别确实跑过（有 recognition 详情）→ 这是"未命中"，不是错误。
-        nd = s.tasker.get_latest_node(entry)
-        if nd is not None and nd.recognition is not None:
-            return nd.recognition
-        raise MaaMcpError(_describe_task_failure(hub, s, entry, job))
-    nd = s.tasker.get_latest_node(entry)
+    nd = _node_detail_from_job(job, entry) or s.tasker.get_latest_node(entry)
     if nd is None or nd.recognition is None:
-        raise MaaMcpError(f"识别未返回结果: {entry}（read_logs 可查 C++ 侧原因）")
+        if job.succeeded:
+            raise MaaMcpError(f"识别未返回结果: {entry}（read_logs 可查 C++ 侧原因）")
+        # MAA 对"入口节点未命中"的标准行为是重试到 timeout 后任务失败，
+        # 任务失败但识别确实跑过（详情里有 recognition）→ 正常"未命中"。
+        raise MaaMcpError(_describe_task_failure(hub, s, entry, job))
     return nd.recognition
+
+
+def _node_detail_from_job(job: "object", entry: str) -> "object | None":
+    """从 job.get()（TaskDetail.nodes）按节点名取 NodeDetail——
+    比 tasker.get_latest_node（runtime cache，任务结束后可能已清空）可靠。"""
+    try:
+        detail = job.get()
+        for nd in getattr(detail, "nodes", None) or []:
+            if getattr(nd, "name", None) == entry:
+                return nd
+    except Exception:
+        pass
+    return None
 
 
 def _describe_task_failure(hub: "object", s: "object", entry: str, job: "object") -> str:
