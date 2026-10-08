@@ -242,21 +242,21 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MaaGF1-Base-${{ steps.deps_info.outputs.mfa_tag }}-${{ matrix.arch }}
-          path: split/MaaGF1-Base-*.zip
+          path: split/base
 
       - name: Upload AgentRT Artifact
         if: matrix.variant == 'with-agent'
         uses: actions/upload-artifact@v4
         with:
           name: MaaGF1-AgentRT-${{ steps.depskey.outputs.key }}-${{ matrix.arch }}
-          path: split/MaaGF1-AgentRT-*.zip
+          path: split/agent-rt
 
       - name: Upload Agent Artifact
         if: matrix.variant == 'with-agent'
         uses: actions/upload-artifact@v4
         with:
           name: MaaGF1-Agent-${{ needs.meta.outputs.tag }}-${{ matrix.arch }}
-          path: split/MaaGF1-Agent-*.zip
+          path: split/agent
 
       - name: Determine Artifact Name
         id: artifact_name
