@@ -260,10 +260,16 @@ def _run_node_recognition(hub: "object", s: "object", node_data: Dict[str, Any],
     返回 RecognitionDetail。
     """
     entry = f"__mcp_{s.id}_{tag}"
-    node = {"recognition": node_data["recognition"], "next": []}
+    node = {"recognition": node_data["recognition"], "next": [],
+            "reco_timeout": 3000}  # 未命中重试窗口：默认 20s 太长，3s 足够判定
     job = s.tasker.post_task(entry, pipeline_override={entry: node})
     job.wait()
     if not job.succeeded:
+        # MAA 对"入口节点未命中"的标准行为是重试到 reco_timeout 后任务失败。
+        # 识别确实跑过（有 recognition 详情）→ 这是"未命中"，不是错误。
+        nd = s.tasker.get_latest_node(entry)
+        if nd is not None and nd.recognition is not None:
+            return nd.recognition
         raise MaaMcpError(_describe_task_failure(hub, s, entry, job))
     nd = s.tasker.get_latest_node(entry)
     if nd is None or nd.recognition is None:

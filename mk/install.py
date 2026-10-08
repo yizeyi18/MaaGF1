@@ -132,6 +132,19 @@ def install_agent(variant: str):
             print("Error: Compiled artifacts not found after build/cache check.")
             sys.exit(1)
 
+        # 一方源码（打包拆分）：exe 只冻结第三方依赖，
+        # main/maa_mcp/sm/utils/action/my_reco 以源码形式分发到
+        # <project>/agent/src/，bootstrap 运行时动态导入。
+        # 这样 Python 侧改动无需重编译、无需重新下载 exe。
+        dest_source = dest_agent_dir / "src"
+        print(f"Copying agent source to {dest_source}")
+        shutil.copytree(
+            AGENT_DIR,
+            dest_source,
+            ignore=shutil.ignore_patterns("__pycache__", "dist", "build", "mk"),
+            dirs_exist_ok=True,
+        )
+
 def install_tools():
     if TOOLS_DIR.exists():
         print(f"Installing tools: {TOOLS_DIR}")

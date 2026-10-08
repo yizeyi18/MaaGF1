@@ -80,14 +80,17 @@ for _pkg in _mcp_pkgs:
     print(f'[build.spec] collected {_pkg}: binaries={len(_b)} datas={len(_d)} hidden={len(_h)}')
 
 a = Analysis(
-    [str(AGENT_ROOT / 'main.py')], 
+    [str(AGENT_ROOT / 'bootstrap.py')],
     pathex=[str(AGENT_ROOT)],
     binaries=_extra_binaries,
     datas=[
         (str(AGENT_ROOT / 'agent.conf'), '.'),
     ] + _extra_datas,
+    # 只冻结第三方依赖：maa 全家桶 + MCP 服务器栈（_extra_hidden）+ numpy/requests。
+    # 一方代码（main/my_reco/action/utils/sm/maa_mcp）不进 PYZ——
+    # 以源码形式分发在 <project>/agent/src/，bootstrap 运行时动态导入。
     hiddenimports=[
-        'maa', 
+        'maa',
         'maa.agent.agent_server',
         'maa.toolkit',
         'maa.controller',
@@ -101,35 +104,17 @@ a = Analysis(
         'maa.event_sink',
         'maa.custom_action',
         'maa.library',
-        'my_reco',
-        'action',
-        'server',
-        'config',
-        'utils',
-        'utils.config',
-        'utils.png',
-        'sm',
-        'sm.core',
-        'sm.states_common',
-        'sm.states_81n',
-        'sm.flows_81n',
-        'sm.maa_bridge',
-        'sm.sm_action',
-        'sm.missing',
-        'sm.boxutil',
-        'maa_mcp',
-        'maa_mcp.config',
-        'maa_mcp.mcp_main',
-        'maa_mcp.hub',
-        'maa_mcp.session',
-        'maa_mcp.bridge',
-        'maa_mcp.tools',
-        'maa_mcp.server',
+        'numpy',
+        'requests',
     ] + _extra_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # 防止 PyInstaller 从 pathex 把一方源码误打进 PYZ
+    excludes=[
+        'main', 'my_reco', 'action', 'utils', 'sm', 'maa_mcp',
+        'server', 'config',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
