@@ -157,20 +157,25 @@ class TaskerBridge(SMContext):
             pass
         return self._detail_from_event(job.job_id)
 
-    def _detail_from_event(self, reco_id: int):
-        """兜底：从 Node.RecognitionNode 事件取识别结果（sm/reco_capture）。"""
+    def _detail_from_event(self, task_id: int):
+        """兜底：从 Node.RecognitionNode 事件取识别结果（sm/reco_capture）。
+
+        按事件 task_id（== job.job_id）精确关联——不能用 reco_id：
+        v5.8.1 里 C API 返回的是 tasker 任务号，而 RecoResult.reco_id
+        是全局计数器（++s_global_reco_id），两者不同值。
+        """
         from sm.reco_capture import EventRecoDetail, MISS
 
         cap = self._session.reco_capture
         if cap is None:
             return None
         # 事件回调理论上在 wait() 返回前已执行（notify 先于任务完成同步
-        # 发出）；IPC/线程时序留 2s 轮询兜底。
+        # 发出）；线程时序留 2s 轮询兜底。
         deadline = time.time() + 2.0
         while True:
-            box = cap.take(reco_id)
+            box = cap.take_by_taskid(task_id)
             if box is not MISS:
-                return EventRecoDetail(reco_id, box)
+                return EventRecoDetail(task_id, box)
             if time.time() >= deadline:
                 return None
             time.sleep(0.05)

@@ -14,9 +14,12 @@ TemplateMatcher::analyze 正常产出 score）。新版 MAA 已在 Recognizer.cp
 识别详情获取的兜底。官方 API 仍是第一选择（未来版本直接可用）。
 
 两种消费方式：
-- take(reco_id)      —— 精确匹配（MCP 直连 tasker 模式，reco_id 已知）
-- take_by_name(...)  —— 按节点名 + 序号匹配（agent 模式：run_recognition
-  不返回 reco_id，且事件经 IPC 有到达时延，SM 检查串行执行）
+- take_by_taskid(task_id)  —— 精确匹配（MCP 直连 tasker 模式：事件
+  task_id == job.job_id；注意不能用 reco_id——它是全局计数器
+  ++s_global_reco_id，与 C API 返回的任务号不同值）
+- take_by_name(...)        —— 按节点名 + 序号匹配（agent 模式：
+  Context 路径的事件 task_id 无效，且事件经 IPC 有到达时延，
+  SM 检查串行执行）
 """
 from __future__ import annotations
 
@@ -26,18 +29,19 @@ from typing import Any, Dict, Optional, Tuple
 
 from maa.event_sink import EventSink
 
-#: take() 未找到对应 reco_id 的哨兵（box 本身可能为 None=未命中）
+#: take_by_* 未找到对应事件的哨兵（box 本身可能为 None=未命中）
 MISS: Any = object()
 
 _MAX_EVENTS = 256
 
 
 class _Captured:
-    __slots__ = ("seq", "reco_id", "name", "box")
+    __slots__ = ("seq", "reco_id", "task_id", "name", "box")
 
-    def __init__(self, seq: int, reco_id: int, name: str, box: Optional[Tuple[int, int, int, int]]):
+    def __init__(self, seq: int, reco_id: int, task_id: int, name: str, box: Optional[Tuple[int, int, int, int]]):
         self.seq = seq
         self.reco_id = reco_id
+        self.task_id = task_id
         self.name = name
         self.box = box
 
@@ -55,6 +59,9 @@ class RecoEventCapture(EventSink):
     def _on_raw_notification(self, handle: Any, msg: str, details: Dict[str, Any]) -> None:
         if not msg.startswith("Node.RecognitionNode."):
             return
+        # 注意：事件里 task_id（tasker 任务号）≠ reco_id（全局识别号，
+        # ++s_global_reco_id）——MCP 直连模式用 task_id 与 job.job_id 精确
+        # 关联；agent 模式（Context 路径）task_id 无效，用节点名+序号。
         reco = (details or {}).get("reco_details") or {}
         reco_id = reco.get("reco_id")
         if not reco_id:
@@ -73,19 +80,23 @@ class RecoEventCapture(EventSink):
         with self._lock:
             self._seq += 1
             self._events[self._seq] = _Captured(
-                self._seq, int(reco_id), str(details.get("name", "")), box,
+                self._seq, int(reco_id), int(details.get("task_id") or 0),
+                str(details.get("name", "")), box,
             )
             while len(self._events) > _MAX_EVENTS:
                 self._events.popitem(last=False)
 
     # ---------------- 消费 ----------------
 
-    def take(self, reco_id: int):
-        """按 reco_id 精确取（取出即删）。未找到返回 MISS。"""
+    def take_by_taskid(self, task_id: int):
+        """按事件 task_id 精确取（MCP 模式：task_id == job.job_id）。
+
+        返回 box（可能为 None=未命中）；未找到返回 MISS。
+        """
         with self._lock:
             target_seq = None
             for seq, ev in self._events.items():
-                if ev.reco_id == reco_id:
+                if ev.task_id == task_id:
                     target_seq = seq
                     break
             if target_seq is None:
