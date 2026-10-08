@@ -64,7 +64,9 @@ def _agent_capture() -> Optional[object]:
                     from .reco_capture import RecoEventCapture
 
                     cap = RecoEventCapture()
-                    AgentServer.add_tasker_sink(cap)  # _sink_holder 持引用防 GC
+                    # Node.* 识别事件走 context 通知器——必须用
+                    # add_context_sink（add_tasker_sink 只收 Tasker.Task.*）
+                    AgentServer.add_context_sink(cap)  # _sink_holder 持引用防 GC
                     _AGENT_CAPTURE = cap
                 except Exception:
                     _log("WARNING", "识别事件捕获注册失败（识别详情将不可用）")

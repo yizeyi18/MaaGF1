@@ -62,7 +62,12 @@ class Session:
                 if cap is None:
                     from sm.reco_capture import RecoEventCapture
                     cap = RecoEventCapture()
-                    self.tasker.add_sink(cap)  # 绑定 _sink_holder 持引用防 GC
+                    # 必须挂 context sink（MaaTaskerAddContextSink）：
+                    # Node.* 识别事件走 context_notifier_，add_sink 挂的
+                    # 是 tasker 级通知器，只收 Tasker.Task.*（线上实证：
+                    # tasker sink 的 recent_msgs 里全是 Tasker.Task.*，
+                    # 一条 Node.Recognition.* 都没有）
+                    self.tasker.add_context_sink(cap)  # _sink_holder 持引用防 GC
                     self._reco_capture = cap
         return cap
 
