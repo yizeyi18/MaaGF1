@@ -204,6 +204,18 @@ def main():
         
         print(f"Final socket_id to use: {socket_id}")
 
+        # 注册状态机动作（8-1N 循环流）——必须在 start_up 之前：
+        # GUI 的 AgentClient 在启动握手（_StartUpResponse）时拉取动作清单，
+        # start_up 之后注册的动作 GUI 看不到（CustomAction::run 报
+        # "Action is null"）。与 parametric_telegram 等旧动作一致：
+        # 全部在 start_up 前注册（它们是 import 期注册的）。
+        try:
+            sm.sm_action.register_sm()
+            print(f"State machine action registered: {sm.sm_action.SM_ACTION_NAME}")
+        except Exception as e:
+            print(f"Warning: failed to register state machine action: {e}")
+            traceback.print_exc()
+
         # 启动服务器
         print("Starting to launch AgentServer...")
         AgentServer.start_up(socket_id)
@@ -213,14 +225,6 @@ def main():
         print("Waiting for AgentServer to fully start...")
         time.sleep(2)
         print("AgentServer startup wait completed")
-
-        # 注册状态机动作（8-1N 循环流）
-        try:
-            sm.sm_action.register_sm()
-            print(f"State machine action registered: {sm.sm_action.SM_ACTION_NAME}")
-        except Exception as e:
-            print(f"Warning: failed to register state machine action: {e}")
-            traceback.print_exc()
 
         # 启动 MCP 远程控制（伴生进程，完整框架模式；失败不影响主流程）。
         # 不能在本进程内跑：本进程是 AgentServer 模式，框架禁止在其中
