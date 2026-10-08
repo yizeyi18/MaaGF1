@@ -122,16 +122,19 @@ class RecoEventCapture(EventSink):
         return self._take(lambda ev: ev.reco_id == reco_id)
 
     def _take(self, match) -> Any:
+        """取**最后一次**匹配事件（取出即删，连同同键的旧事件一起清掉）。
+
+        取最后一次的原因：post_task 的识别节点未命中会在 timeout 内
+        重试，每次重试都发事件且共享同一 task_id——最后一次尝试的
+        结果才是任务最终结论（任务成功=最后命中；失败=最后未命中）。
+        """
         with self._lock:
-            target_seq = None
-            for seq, ev in self._events.items():
-                if match(ev):
-                    target_seq = seq
-                    break
-            if target_seq is None:
+            matched = [seq for seq, ev in self._events.items() if match(ev)]
+            if not matched:
                 return MISS
-            box = self._events[target_seq].box
-            del self._events[target_seq]
+            box = self._events[max(matched)].box
+            for seq in matched:
+                del self._events[seq]
             return box
 
     def snapshot(self) -> Dict[str, Any]:

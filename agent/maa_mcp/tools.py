@@ -267,13 +267,38 @@ def _run_node_recognition(hub: "object", s: "object", node_data: Dict[str, Any],
     job = s.tasker.post_task(entry, pipeline_override={entry: node})
     job.wait()
     nd = _node_detail_from_job(job, entry) or s.tasker.get_latest_node(entry)
-    if nd is None or nd.recognition is None:
-        if job.succeeded:
-            raise MaaMcpError(f"识别未返回结果: {entry}（read_logs 可查 C++ 侧原因）")
-        # MAA 对"入口节点未命中"的标准行为是重试到 timeout 后任务失败，
-        # 任务失败但识别确实跑过（详情里有 recognition）→ 正常"未命中"。
-        raise MaaMcpError(_describe_task_failure(hub, s, entry, job))
-    return nd.recognition
+    if nd is not None and nd.recognition is not None:
+        return nd.recognition
+    # MAA v5.8.1：GetRecognitionDetail 必然失败（TaskDetail 的节点
+    # recognition 同源）→ 事件兜底：Node.Recognition.* 事件带 task_id
+    # （== job.job_id）+ reco_details.box，命中/未命中都能区分
+    detail = _reco_detail_from_event(s, job.job_id)
+    if detail is not None:
+        return detail
+    if job.succeeded:
+        raise MaaMcpError(f"识别未返回结果: {entry}（read_logs 可查 C++ 侧原因）")
+    # MAA 对"入口节点未命中"的标准行为是重试到 timeout 后任务失败——
+    # 走到这里说明识别根本没跑（节点无效/任务异常），属真错误
+    raise MaaMcpError(_describe_task_failure(hub, s, entry, job))
+
+
+def _reco_detail_from_event(s: "object", task_id: int) -> "object | None":
+    """事件兜底取识别结果（sm/reco_capture）；task_id == job.job_id。"""
+    import time as _time
+
+    from sm.reco_capture import EventRecoDetail, MISS
+
+    cap = s.reco_capture
+    if cap is None:
+        return None
+    deadline = _time.time() + 2.0
+    while True:
+        box = cap.take_by_taskid(task_id)
+        if box is not MISS:
+            return EventRecoDetail(task_id, box)
+        if _time.time() >= deadline:
+            return None
+        _time.sleep(0.05)
 
 
 def _node_detail_from_job(job: "object", entry: str) -> "object | None":
