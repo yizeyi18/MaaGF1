@@ -128,13 +128,16 @@ for d in a.datas:
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# onedir（而非 onefile）：exe + _internal/ 目录，启动时零解包。
+# 原因：GUI 启动 agent 后只重试 3 次（~8 秒）就永久放弃；onefile 冷启动
+# 要先把 ~100MB 解压到临时目录（30-60s），新 exe 首次部署必超时
+# （线上日志：49f6fb4 包 GUI 23:21:47/50/53 三次 connect 全部
+# "socket is not alive"，23:21:55 报 Agent 启动失败）。
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,  # onedir：exe 文件由 COLLECT 写入 maa_agent/ 目录
     name='maa_agent',
     debug=False,
     bootloader_ignore_signals=False,
@@ -149,4 +152,17 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=None,
+)
+
+# onedir 输出到 dist/maa_agent/（exe + _internal/）。
+# install.py 会把它"摊平"成 agent/dist/maa_agent.exe + agent/dist/_internal/，
+# 与 bootstrap 的 get_project_root()（dist 上两级 = 项目根）约定一致。
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='maa_agent',
 )

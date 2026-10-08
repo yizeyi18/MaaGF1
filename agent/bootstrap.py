@@ -30,6 +30,32 @@ import importlib
 import os
 import platform
 import sys
+import time
+import traceback
+
+_BOOT_LOG_PATH: str | None = None
+
+
+def _boot_log(msg: str) -> None:
+    """启动自诊断日志：GUI 只重试 agent 连接 ~8 秒就永久放弃，
+    子进程的 stdout 没有去处——每一步 + 完整 traceback 落盘，
+    下次再出问题直接看 agent/dist/agent_boot.log。"""
+    global _BOOT_LOG_PATH
+    try:
+        if _BOOT_LOG_PATH is None:
+            if getattr(sys, "frozen", False):
+                base = os.path.dirname(sys.executable)
+            else:
+                base = os.path.dirname(os.path.abspath(__file__))
+            _BOOT_LOG_PATH = os.path.join(base, "agent_boot.log")
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(_BOOT_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{stamp}] {msg}\n")
+            if isinstance(msg, (list, tuple)):
+                for line in msg:
+                    f.write(f"    {line}\n")
+    except Exception:
+        pass
 
 
 def get_executable_dir() -> str:
@@ -78,13 +104,24 @@ def get_agent_src_dir() -> str:
 
 
 def main() -> int:
-    setup_dll_path()
+    mode = "--mcp" if "--mcp" in sys.argv else "agent"
+    _boot_log(f"=== bootstrap start (mode={mode}, frozen={getattr(sys, 'frozen', False)}) ===")
+    _boot_log(f"argv: {sys.argv}")
+
+    try:
+        dll_dir = setup_dll_path()
+        _boot_log(f"dll_dir: {dll_dir}")
+    except SystemExit:
+        _boot_log(traceback.format_exc())
+        raise
 
     src_dir = get_agent_src_dir()
     if not os.path.isdir(src_dir):
+        _boot_log(f"ERROR: 一方源码目录不存在: {src_dir}（请部署 Agent 包）")
         print(f"[bootstrap] 一方源码目录不存在: {src_dir}")
         print("[bootstrap] 请部署 Agent 包（agent/src + resource + interface.json）")
         return 1
+    _boot_log(f"src_dir: {src_dir}")
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
 
@@ -93,15 +130,24 @@ def main() -> int:
 
     # 注意：模块名必须字符串拼接——PyInstaller 会静态解析
     # importlib.import_module 的字面量参数，字面量会把一方代码打进 PYZ。
-    if "--mcp" in sys.argv:
-        # MCP 伴生进程：只 import maa（完整框架模式），不 import maa.agent
-        mod = importlib.import_module("maa_mcp" + ".mcp_main")
-        return int(mod.mcp_coprocess_main(project_root, exe_dir))
+    try:
+        if mode == "--mcp":
+            # MCP 伴生进程：只 import maa（完整框架模式），不 import maa.agent
+            mod = importlib.import_module("maa_mcp" + ".mcp_main")
+            _boot_log("mcp_main imported, starting coprocess...")
+            return int(mod.mcp_coprocess_main(project_root, exe_dir))
 
-    # agent 主体（AgentServer 模式）
-    mod = importlib.import_module("m" + "ain")
-    mod.main()
-    return 0
+        # agent 主体（AgentServer 模式）
+        mod = importlib.import_module("m" + "ain")
+        _boot_log("main module imported from src, calling main()...")
+        mod.main()
+        return 0
+    except SystemExit:
+        raise
+    except Exception:
+        _boot_log(f"EXCEPTION in mode={mode}:")
+        _boot_log(traceback.format_exc().splitlines())
+        raise
 
 
 if __name__ == "__main__":

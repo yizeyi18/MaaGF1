@@ -100,10 +100,12 @@ def install_agent(variant: str):
             )
     
     elif variant == "with-agent":
-        # Check if pre-built artifact exists (from Cache)
-        # Assuming the build script outputs to agent/dist/maa_agent.exe
-        prebuilt_exe = AGENT_DIR / "dist" / "maa_agent.exe"
-        
+        # onedir 布局：PyInstaller 输出到 agent/dist/maa_agent/（exe + _internal/）。
+        # 用 onedir 而非 onefile：onefile 冷启动要解压 ~100MB 到临时目录
+        # （30-60s），超出 GUI 的 agent 连接重试窗口（~8s）导致"Agent 启动失败"。
+        onedir_dir = AGENT_DIR / "dist" / "maa_agent"
+        prebuilt_exe = onedir_dir / "maa_agent.exe"
+
         if prebuilt_exe.exists():
             print(f"Found cached agent build at {prebuilt_exe}. Skipping compilation.")
         else:
@@ -112,18 +114,21 @@ def install_agent(variant: str):
             if not build_script.exists():
                 print(f"Error: Build script not found at {build_script}")
                 sys.exit(1)
-                
+
             print("Executing agent build script...")
             subprocess.check_call([sys.executable, str(build_script)])
-        
-        # Copy artifacts
-        src_dist = AGENT_DIR / "dist"
+
+        # Copy artifacts：把 dist/maa_agent/* 摊平到 <project>/agent/dist/
+        #   → <project>/agent/dist/maa_agent.exe
+        #   → <project>/agent/dist/_internal/
+        # 与 interface.json 的 child_exec（agent/dist/maa_agent.exe）一致，
+        # 且 PyInstaller onedir 的 _internal 与 exe 同目录可被自动发现。
         dest_dist = dest_agent_dir / "dist"
-        
-        if src_dist.exists():
-            print(f"Copying compiled agent from {src_dist}")
-            shutil.copytree(src_dist, dest_dist, dirs_exist_ok=True)
-            
+
+        if onedir_dir.exists():
+            print(f"Copying compiled agent (onedir) from {onedir_dir}")
+            shutil.copytree(onedir_dir, dest_dist, dirs_exist_ok=True)
+
             # Also copy agent.conf if needed
             src_conf = AGENT_DIR / "agent.conf"
             if src_conf.exists():
