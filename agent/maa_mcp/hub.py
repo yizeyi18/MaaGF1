@@ -87,9 +87,34 @@ def list_desktop_windows() -> List[Dict[str, Any]]:
 # GameHub
 # ======================================================================================
 
+def count_pipeline_nodes(resource_dir: str) -> Optional[int]:
+    """统计磁盘上 pipeline JSON 的节点数。
+
+    maafw 5.2.6 的 Resource 绑定没有节点列表 API（get_node_list 不存在），
+    直接数 pipeline 文件。
+    """
+    root = os.path.join(resource_dir, "pipeline")
+    if not os.path.isdir(root):
+        return None
+    n = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in files:
+            if not fn.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(dirpath, fn), encoding="utf-8") as f:
+                    d = json.load(f)
+            except Exception:
+                continue
+            if isinstance(d, dict):
+                n += sum(1 for k in d if not k.startswith(("_", "$")))
+    return n
+
+
 class GameHub:
-    def __init__(self, project_root: str, cfg: "object"):
+    def __init__(self, project_root: str, cfg: "object", exe_dir: str = ""):
         self.project_root = project_root
+        self.exe_dir = exe_dir or project_root  # 冻结 exe 目录（日志/conf 所在）
         self.cfg = cfg
         self.resource_dir = self._find_resource_dir(project_root)
         self.interface = self._load_interface()
@@ -332,10 +357,7 @@ class GameHub:
             job = self.resource.post_bundle(self.resource_dir)
             job.wait()
             reload_ok = bool(job.succeeded)
-            try:
-                nodes = len(self.resource.get_node_list())
-            except Exception:
-                pass
+            nodes = count_pipeline_nodes(self.resource_dir)
         return {"written": written, "reloaded": reload_ok, "node_count": nodes}
 
     # ---------------- 截图 ----------------

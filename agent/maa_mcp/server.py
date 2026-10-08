@@ -201,6 +201,16 @@ def register_tools(server: "object") -> None:
         """请求状态机流在下一个步骤边界停止（协作式）。"""
         return _call("stop_sm", session_id=session_id)
 
+    @server.tool()
+    def read_logs(source: str = "all", lines: int = 100, pattern: str = "") -> object:
+        """读磁盘日志尾部（诊断任务/识别失败的关键工具）。
+
+        source: all | framework | 具体文件 key（先不传参看 available 列表）。
+        pattern: 行过滤（优先正则，如 ERR|__mcp_s1，非法正则按子串）。
+        lines: 每来源最多返回行数（≤500，取过滤后尾部）。
+        """
+        return _call("read_logs", source=source, lines=lines, pattern=pattern)
+
 
 _IMPL: Dict[str, Any] = {
     "get_info": T.tool_get_info,
@@ -225,6 +235,7 @@ _IMPL: Dict[str, Any] = {
     "check_state": T.tool_check_state,
     "run_sm_8_1n": T.tool_run_sm_8_1n,
     "stop_sm": T.tool_stop_sm,
+    "read_logs": T.tool_read_logs,
 }
 
 
@@ -347,7 +358,7 @@ def spawn_mcp_coprocess(project_root: str, executable_dir: str) -> bool:
         main_py = Path(__file__).resolve().parent.parent / "main.py"
         cmd = [sys.executable, str(main_py), "--mcp", project_root, executable_dir]
 
-    kwargs: Dict[str, Any] = {}
+    kwargs: Dict[str, Any] = {"cwd": executable_dir}
     if os.name == "nt":
         CREATE_NO_WINDOW = 0x08000000
         CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -381,7 +392,7 @@ def start_mcp_server(project_root: str, executable_dir: str) -> int:
         _log("已禁用（maa_mcp.conf enable=false）", conf_path)
         return 0
 
-    HUB = GameHub(project_root, _CFG)
+    HUB = GameHub(project_root, _CFG, exe_dir=executable_dir)
 
     try:
         app = _build_app(_CFG.api_key)

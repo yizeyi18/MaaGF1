@@ -25,6 +25,20 @@ def mcp_coprocess_main(project_root: str, exe_dir: str) -> int:
     except Exception:
         pass
 
+    # 框架 C++ 日志落盘（与 GUI 的 MaaGlobalSetOption(LogDir) 同一机制）。
+    # 不设置的话，伴生进程的 C++ 日志只走 stderr（拉起时 DEVNULL），
+    # post_task/识别/截图的 C++ 层错误将无从查起。
+    # 写到 <exe_dir>/debug/，与 GUI 的 <project>/debug/maa.log 区分开。
+    try:
+        from maa.tasker import Tasker
+
+        log_dir = os.path.join(exe_dir, "debug")
+        os.makedirs(log_dir, exist_ok=True)
+        if not Tasker.set_log_dir(log_dir):
+            print("[maa_mcp] Tasker.set_log_dir returned False (non-fatal)")
+    except Exception as e:
+        print(f"[maa_mcp] Tasker.set_log_dir failed (non-fatal): {e}")
+
     # 初始化框架（完整框架模式）。DLL 目录已由 main.setup_dll_path 写入
     # MAAFW_BINARY_PATH 环境变量并被子进程继承。init_option 失败不致命
     # （窗口发现/Tasker 不依赖 toolkit 全局配置），仅记录。

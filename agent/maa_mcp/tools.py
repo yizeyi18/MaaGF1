@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import base64
 import copy
+import json
 import os
 import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from .hub import ActiveLockError, InfraError, MaaMcpError, SessionNotFoundError
+from .hub import ActiveLockError, InfraError, MaaMcpError, SessionNotFoundError, count_pipeline_nodes
 from utils.png import encode_png  # noqa: F401  (re-export for server)
 
 # ======================================================================================
@@ -35,15 +36,98 @@ def tool_get_info(hub: "object") -> Dict[str, Any]:
 
 
 def _node_count(hub: "object") -> Optional[int]:
-    try:
-        return len(hub.resource.get_node_list())
-    except Exception:
-        return None
+    return count_pipeline_nodes(hub.resource_dir)
 
 
 def _active_id(hub: "object") -> Optional[str]:
     with hub._lock:
         return hub._active_session
+
+
+def _tail_log(path: str, max_bytes: int = 512 * 1024):
+    """读文件尾部（大文件只读最后 max_bytes），返回 (text, size) 或 (None, 0)。"""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None, 0
+    try:
+        with open(path, "rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+                f.readline()  # 丢弃可能的半行
+            data = f.read()
+    except OSError:
+        return None, 0
+    return data.decode("utf-8", errors="replace"), size
+
+
+def tool_read_logs(hub: "object", source: str = "all", lines: int = 100,
+                   pattern: str = "") -> Dict[str, Any]:
+    """读磁盘日志尾部（诊断框架/任务失败的关键工具）。
+
+    来源（自动探测多个可能位置，因为 GUI 与 MCP 伴生进程的 CWD/exe 目录不同，
+    框架的相对路径 debug/ 会落到不同地方）：
+    - framework: <project>/debug/*.log（GUI 侧）、<exe_dir>/debug/*.log（伴生进程侧）、
+      <cwd>/debug/*.log —— MAA C++ 框架日志，post_task/识别/截图的 C++ 层错误在这里
+    - mcp: <exe_dir>/maa_mcp.log —— MCP 服务端 Python 日志
+    source=all 全要；source=framework 只要框架日志；也可传具体文件 key；
+    pattern 过滤行（优先正则，非法正则按子串）；lines 每来源最多返回行数（≤500，取尾部）。
+    """
+    # 候选 debug 目录：包根（GUI 的 CWD）、exe 目录（伴生进程 CWD 固定于此）、进程 CWD
+    candidates = [
+        ("root", os.path.join(hub.project_root, "debug")),
+        ("exe", os.path.join(hub.exe_dir, "debug")),
+        ("cwd", os.path.join(os.getcwd(), "debug")),
+    ]
+    files: Dict[str, str] = {}
+    seen_dirs = set()
+    for label, d in candidates:
+        rd = os.path.realpath(d)
+        if not os.path.isdir(d) or rd in seen_dirs:
+            continue
+        seen_dirs.add(rd)
+        for fn in sorted(os.listdir(d)):
+            if fn.lower().endswith(".log"):
+                files[f"{label}/debug/{fn}"] = os.path.join(d, fn)
+    for label, p in (("exe", os.path.join(hub.exe_dir, "maa_mcp.log")),
+                     ("root", os.path.join(hub.project_root, "maa_mcp.log"))):
+        if os.path.isfile(p) and os.path.realpath(p) not in {os.path.realpath(v) for v in files.values()}:
+            files[f"maa_mcp.log({label})"] = p
+
+    s = (source or "all").lower()
+    if s not in ("all", "framework") and s not in files:
+        raise MaaMcpError(f"未知日志来源: {source}（可用: {', '.join(sorted(files))} 或 all/framework）")
+    if s == "all":
+        want = list(files.keys())
+    elif s == "framework":
+        want = [k for k in files if "maa_mcp" not in k]
+    else:
+        want = [s]
+
+    lines = max(1, min(int(lines), 500))
+    out: Dict[str, Any] = {}
+    for key in want[:10]:
+        text, size = _tail_log(files[key])
+        if text is None:
+            out[key] = {"error": "读取失败"}
+            continue
+        ls = text.splitlines()
+        if pattern:
+            try:
+                rx = re.compile(pattern)
+                ls = [l for l in ls if rx.search(l)]
+            except re.error:
+                ls = [l for l in ls if pattern in l]
+        matched = len(ls)
+        tail = ls[-lines:]
+        out[key] = {
+            "size_bytes": size,
+            "matched": matched,
+            "returned": len(tail),
+            "truncated": matched > len(tail),
+            "lines": tail,
+        }
+    return {"sources": out, "available": sorted(files.keys())}
 
 
 def tool_list_sessions(hub: "object") -> Dict[str, Any]:
@@ -169,11 +253,48 @@ def _run_node_recognition(hub: "object", s: "object", node_data: Dict[str, Any],
     job = s.tasker.post_task(entry, pipeline_override={entry: node})
     job.wait()
     if not job.succeeded:
-        raise MaaMcpError(f"识别任务失败: {entry}（检查窗口/控制器状态，get_info 可诊断）")
+        raise MaaMcpError(_describe_task_failure(hub, s, entry, job))
     nd = s.tasker.get_latest_node(entry)
     if nd is None or nd.recognition is None:
-        raise MaaMcpError(f"识别未返回结果: {entry}")
+        raise MaaMcpError(f"识别未返回结果: {entry}（read_logs 可查 C++ 侧原因）")
     return nd.recognition
+
+
+def _describe_task_failure(hub: "object", s: "object", entry: str, job: "object") -> str:
+    """post_task 失败的多层诊断：
+
+    - job_id 无效 → 任务从未被提交（post_task 返回 MaaInvalidId），
+      通常是 Tasker.inited() 不满足（resource 未加载 / controller 未连接）
+      或 override pipeline 解析失败
+    - job_id 有效但失败 → 任务执行中失败，取 task detail 的节点状态
+    C++ 层错误详情始终在 debug/MaaFramework.log（用 read_logs 工具读）。
+    """
+    parts = [f"识别任务失败: {entry}"]
+    job_id = int(getattr(job, "job_id", 0) or 0)
+    if job_id <= 0:
+        parts.append("任务未被提交（post_task 返回无效 id）")
+        try:
+            parts.append(f"controller.connected={hub.controller.connected}")
+        except Exception as e:
+            parts.append(f"controller 状态未知: {e}")
+        try:
+            parts.append(f"resource.loaded={hub.resource.loaded}")
+        except Exception as e:
+            parts.append(f"resource 状态未知: {e}")
+        parts.append("常见原因：窗口已失效需重建控制器、override 节点 JSON 解析失败（见 read_logs）")
+        return "; ".join(parts)
+    try:
+        detail = s.tasker.get_task_detail(job_id)
+        if detail is not None:
+            nodes = list(getattr(detail, "nodes", None) or [])[-5:]
+            if nodes:
+                parts.append("nodes=" + ",".join(
+                    f"{getattr(n, 'name', '?')}({'ok' if getattr(n, 'completed', False) else 'FAIL'})"
+                    for n in nodes))
+    except Exception:
+        pass
+    parts.append("C++ 层错误详情: read_logs(source=framework, pattern=...)")
+    return "; ".join(parts)
 
 
 def tool_ocr(hub: "object", session_id: str = "", roi: Optional[List[int]] = None,
