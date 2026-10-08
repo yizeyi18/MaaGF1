@@ -116,6 +116,7 @@ a = Analysis(
         'sm.maa_bridge',
         'sm.sm_action',
         'sm.missing',
+        'sm.boxutil',
         'maa_mcp',
         'maa_mcp.config',
         'maa_mcp.mcp_main',

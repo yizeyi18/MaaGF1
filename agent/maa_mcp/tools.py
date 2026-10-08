@@ -258,9 +258,11 @@ def _detail_to_dict(detail: Optional["object"]) -> Dict[str, Any]:
 
 
 def _box_to_list(box: Optional["object"]) -> Optional[List[int]]:
-    if box is None:
-        return None
-    return [int(box.x), int(box.y), int(box.w), int(box.h)]
+    # 绑定 box 运行时可能是 [x,y,w,h] list 或 Rect 对象（见 sm.boxutil）
+    from sm.boxutil import box_xywh
+
+    xywh = box_xywh(box)
+    return list(xywh) if xywh is not None else None
 
 
 # ======================================================================================

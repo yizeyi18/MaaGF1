@@ -177,8 +177,10 @@ class MaaBridge(SMContext):
 
     @staticmethod
     def _center(detail: "object", a: ActionSpec) -> tuple[int, int]:
-        box = detail.box
-        return box.x + box.w // 2 + a.dx, box.y + box.h // 2 + a.dy
+        from .boxutil import box_xywh
+
+        x, y, w, h = box_xywh(detail.box)
+        return x + w // 2 + a.dx, y + h // 2 + a.dy
 
     def _recognize(self, node: str, image: "object"):
         if is_missing(node):
