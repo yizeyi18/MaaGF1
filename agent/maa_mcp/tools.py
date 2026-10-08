@@ -718,6 +718,11 @@ def tool_run_sm_8_1n(hub: "object", session_id: str, rounds: "object" = 1,
             runner.run()
         except SMError as e:
             holder["error"] = e
+        except Exception as e:
+            # 非 SMError（框架级/ctypes 等）绝不可静默吞掉——否则 daemon
+            # 线程直接死掉，调用方拿到 success:true/rounds:0（实测：截图
+            # OverflowError 被吞，流"成功"10.9s 跑 0 轮）
+            holder["error"] = SMError(f"流异常: {type(e).__name__}: {e}")
 
     with hub.with_active(s):
         t = threading.Thread(target=_work, daemon=True, name="mcp-sm-flow")

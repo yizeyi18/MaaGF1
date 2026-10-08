@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import sys
 import threading
 import time
 import traceback
@@ -60,6 +61,45 @@ def node_to_reco(node_data: Dict) -> Tuple[str, "object"]:
     return rtype, cls(**kwargs)
 
 
+# ---------------- 状态机轨迹日志 ----------------
+#
+# 红线：MCP 伴生进程里【绝不 import action 包】（含 action.log）！
+# action/log.py 模块级 `from maa.agent.agent_server import AgentServer` ——
+# import maa.agent 会把框架切进 AgentServer 模式（MaaTaskerCreate /
+# MaaWin32ControllerCreate / MaaResourceCreate 全部变 NotImpl 桩）。
+# 伴生进程是完整框架模式，import 之后共享 controller 直接被破坏：
+# 实测 run_sm_8_1n 首条 log 触发 action import（03:19:18 注册
+# matlab/parametric 自定义动作），紧接着的截图即抛
+# OverflowError，同路径截图在 import 前一直正常。
+# 故此处用独立文件日志（read_logs source=maa_mcp.log(exe) 可读）。
+
+_sm_log_lock = threading.Lock()
+
+
+def _sm_log_path() -> str:
+    # 伴生进程 CWD 固定为 exe 目录（PyInstaller onedir，sys.executable
+    # 也位于该目录）；与 read_logs 的 maa_mcp.log(exe) 源对齐
+    try:
+        return os.path.join(os.path.dirname(os.path.abspath(sys.executable)),
+                            "maa_mcp.log")
+    except Exception:
+        return os.path.join(os.getcwd(), "maa_mcp.log")
+
+
+def _sm_log(level: str, msg: str) -> None:
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}][{level}] {msg}"
+    try:
+        print(line, flush=True)
+    except Exception:
+        pass
+    try:
+        with _sm_log_lock:
+            with open(_sm_log_path(), "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    except Exception:
+        pass
+
+
 class TaskerBridge(SMContext):
     def __init__(self, hub: "object", session: "object", stop_event: threading.Event,
                  debug_dir: str = "debug_sm"):
@@ -79,11 +119,7 @@ class TaskerBridge(SMContext):
         return self._stop.is_set() or self._hub.stop_sm.is_set()
 
     def log(self, level: str, msg: str) -> None:
-        try:
-            from action.log import MaaLog_Debug, MaaLog_Info
-            (MaaLog_Debug if level == "DEBUG" else MaaLog_Info)(msg)
-        except Exception:
-            print(f"[{level}] {msg}")
+        _sm_log(level, msg)
 
     def screenshot(self) -> "object":
         return self._hub.screencap()
