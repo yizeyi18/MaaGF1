@@ -45,6 +45,33 @@ def _log(level: str, msg: str) -> None:
         print(f"[{level}] {msg}")
 
 
+# ---------------- 识别事件捕获（v5.8.1 GetRecognitionDetail 失败兜底） ----------------
+
+_AGENT_CAPTURE: Optional[object] = None
+_AGENT_CAPTURE_LOCK = threading.Lock()
+_AGENT_LAST_SEQ = 0  # 已消费到的事件序号（SM 检查串行 → 全局单调安全）
+
+
+def _agent_capture() -> Optional[object]:
+    """agent 模式的事件捕获：全局注册一次，sink 事件由 AgentServer
+    转发自主进程（GUI 进程）的 tasker。"""
+    global _AGENT_CAPTURE
+    if _AGENT_CAPTURE is None:
+        with _AGENT_CAPTURE_LOCK:
+            if _AGENT_CAPTURE is None:
+                try:
+                    from maa.agent.agent_server import AgentServer
+
+                    from .reco_capture import RecoEventCapture
+
+                    cap = RecoEventCapture()
+                    AgentServer.add_tasker_sink(cap)  # _sink_holder 持引用防 GC
+                    _AGENT_CAPTURE = cap
+                except Exception:
+                    _log("WARNING", "识别事件捕获注册失败（识别详情将不可用）")
+    return _AGENT_CAPTURE
+
+
 class MaaBridge(SMContext):
     def __init__(self, context: Context, stop_event: threading.Event,
                  debug_dir: str = "debug_sm", stop_file: str = ""):
@@ -93,19 +120,43 @@ class MaaBridge(SMContext):
         # 缺失图片：按"未命中"处理并告警（不抛异常）。
         # 状态定位(locate)会对所有状态跑检查，若抛异常整个流会崩；
         # 而 v1 的 8-1N 流不依赖缺失检查，占位状态(main)自然永不匹配。
+        # 注意 ok=spec.inverted（未命中：普通检查不过，inverted 检查过）——
+        # 此前误写 ok=(not inverted)，把"没识别"当"命中"，任何屏都会
+        # 误报第一个全普通检查的状态。
         if is_missing(spec.node):
             self._warn_missing_once(spec.node)
-            return CheckResult(ok=(not spec.inverted), spec=spec, detail=None)
+            return CheckResult(ok=spec.inverted, spec=spec, detail=None)
         if image is None:
             image = self.screenshot()
-        try:
-            detail = self._ctx.run_recognition(spec.node, image)
-        except Exception as e:
-            raise SMError(f"识别 {spec.node} 失败: {e}") from e
+        detail = self._recognize(spec.node, image)
         if detail is None:
-            return CheckResult(ok=(not spec.inverted), spec=spec, detail=None)
+            # 识别失败/无详情 → 按"未命中"处理（与 MCP bridge 同语义）
+            return CheckResult(ok=spec.inverted, spec=spec, detail=None)
         hit = bool(detail.hit)
         return CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
+
+    def _detail_from_event(self, node: str):
+        """兜底：从 Node.RecognitionNode 事件取识别结果（见 sm/reco_capture）。
+
+        agent 模式的 run_recognition 不返回 reco_id，且事件经 IPC 转发
+        有到达时延；SM 检查串行执行 → 按节点名 + 事件序号匹配。
+        """
+        global _AGENT_LAST_SEQ
+        from .reco_capture import EventRecoDetail
+
+        cap = _agent_capture()
+        if cap is None:
+            return None
+        deadline = time.time() + 2.0
+        while True:
+            got = cap.take_by_name(node, after_seq=_AGENT_LAST_SEQ)
+            if got is not None:
+                seq, box = got
+                _AGENT_LAST_SEQ = seq
+                return EventRecoDetail(seq, box)  # agent 模式无 reco_id，用 seq 标识
+            if time.time() >= deadline:
+                return None
+            time.sleep(0.02)
 
     def do_action(self, action: ActionSpec) -> None:
         try:
@@ -185,7 +236,15 @@ class MaaBridge(SMContext):
     def _recognize(self, node: str, image: "object"):
         if is_missing(node):
             raise MissingImageError(describe_missing(node))
-        return self._ctx.run_recognition(node, image)
+        try:
+            detail = self._ctx.run_recognition(node, image)
+        except Exception as e:
+            raise SMError(f"识别 {node} 失败: {e}") from e
+        if detail is None:
+            # MAA v5.8.1：run_recognition 的详情获取
+            # （GetRecognitionDetail）对 Context 识别必然失败 → 事件兜底
+            detail = self._detail_from_event(node)
+        return detail
 
     def _pinch(self, cx: int, cy: int, dist: int, inward: bool) -> None:
         """双指水平捏合缩放。inward=False 手指张开=放大，True 手指收拢=缩小。

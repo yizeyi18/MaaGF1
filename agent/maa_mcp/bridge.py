@@ -91,12 +91,16 @@ class TaskerBridge(SMContext):
     def check(self, spec: CheckSpec, image: "object" = None) -> CheckResult:
         if is_missing(spec.node):
             self._warn_missing_once(spec.node)
-            return CheckResult(ok=(not spec.inverted), spec=spec, detail=None)
+            return CheckResult(ok=spec.inverted, spec=spec, detail=None)
         if image is None:
             image = self.screenshot()
         detail = self._recognize(spec.node, image)
         if detail is None:
-            return CheckResult(ok=(not spec.inverted), spec=spec, detail=None)
+            # 识别失败/无详情 → 按"未命中"处理（与 CheckResult.hit 一致）：
+            # 普通检查（须命中）不通过，inverted 检查（须不命中）通过。
+            # 此前误写 ok=(not inverted)——把识别失败当命中，基地屏上
+            # 所有普通检查全"通过"，locate 必误报优先级最高的状态。
+            return CheckResult(ok=spec.inverted, spec=spec, detail=None)
         hit = bool(detail.hit)
         return CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
 
@@ -143,10 +147,33 @@ class TaskerBridge(SMContext):
         job = self._tasker.post_recognition(rtype, param, self._hub.to_bgr(image))
         job.wait()
         try:
-            # 识别任务的 taskid 即 reco_id
-            return self._tasker.get_recognition_detail(job.job_id)
+            # 识别任务的 taskid 即 reco_id。官方 API（新版 MAA 正常；
+            # v5.8.1 的 post_recognition 结果不入 runtime cache，此调用
+            # 必然失败 → 落到事件兜底）
+            detail = self._tasker.get_recognition_detail(job.job_id)
+            if detail is not None:
+                return detail
         except Exception:
+            pass
+        return self._detail_from_event(job.job_id)
+
+    def _detail_from_event(self, reco_id: int):
+        """兜底：从 Node.RecognitionNode 事件取识别结果（sm/reco_capture）。"""
+        from sm.reco_capture import EventRecoDetail, MISS
+
+        cap = self._session.reco_capture
+        if cap is None:
             return None
+        # 事件回调理论上在 wait() 返回前已执行（notify 先于任务完成同步
+        # 发出）；IPC/线程时序留 2s 轮询兜底。
+        deadline = time.time() + 2.0
+        while True:
+            box = cap.take(reco_id)
+            if box is not MISS:
+                return EventRecoDetail(reco_id, box)
+            if time.time() >= deadline:
+                return None
+            time.sleep(0.05)
 
     @staticmethod
     def _center(detail: "object", a: ActionSpec) -> Tuple[int, int]:

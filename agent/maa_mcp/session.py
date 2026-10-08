@@ -41,6 +41,29 @@ class Session:
         self.tasker: "object" = None  # 由 hub.create_session 绑定
         self._task: Optional[_TaskState] = None
         self._task_lock = threading.Lock()
+        self._reco_capture: "object" = None
+        self._reco_lock = threading.Lock()
+
+    @property
+    def reco_capture(self):
+        """post_recognition 结果的事件捕获（每 tasker 只注册一次 sink）。
+
+        MAA v5.8.1 的 post_recognition 结果不入 runtime cache，
+        MaaTaskerGetRecognitionDetail 必然失败——识别详情改从
+        Node.RecognitionNode 事件拿（见 sm/reco_capture.py）。
+        """
+        if self.tasker is None:
+            return None
+        cap = self._reco_capture
+        if cap is None:
+            with self._reco_lock:
+                cap = self._reco_capture
+                if cap is None:
+                    from sm.reco_capture import RecoEventCapture
+                    cap = RecoEventCapture()
+                    self.tasker.add_sink(cap)  # 绑定 _sink_holder 持引用防 GC
+                    self._reco_capture = cap
+        return cap
 
     # ---------------- 任务 ----------------
 
