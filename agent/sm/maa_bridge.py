@@ -49,7 +49,6 @@ def _log(level: str, msg: str) -> None:
 
 _AGENT_CAPTURE: Optional[object] = None
 _AGENT_CAPTURE_LOCK = threading.Lock()
-_AGENT_LAST_SEQ = 0  # 已消费到的事件序号（SM 检查串行 → 全局单调安全）
 
 
 def _agent_capture() -> Optional[object]:
@@ -135,25 +134,22 @@ class MaaBridge(SMContext):
         hit = bool(detail.hit)
         return CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
 
-    def _detail_from_event(self, node: str):
-        """兜底：从 Node.RecognitionNode 事件取识别结果（见 sm/reco_capture）。
+    def _detail_from_event(self, reco_id: int):
+        """兜底：从 Node.Recognition.* 事件取识别结果（见 sm/reco_capture）。
 
-        agent 模式的 run_recognition 不返回 reco_id，且事件经 IPC 转发
-        有到达时延；SM 检查串行执行 → 按节点名 + 事件序号匹配。
+        按事件顶层 reco_id 精确关联（== MaaContextRunRecognition 返回
+        值）；事件经 IPC 转发有到达时延 → 短轮询。
         """
-        global _AGENT_LAST_SEQ
-        from .reco_capture import EventRecoDetail
+        from .reco_capture import EventRecoDetail, MISS
 
         cap = _agent_capture()
         if cap is None:
             return None
         deadline = time.time() + 2.0
         while True:
-            got = cap.take_by_name(node, after_seq=_AGENT_LAST_SEQ)
-            if got is not None:
-                seq, box = got
-                _AGENT_LAST_SEQ = seq
-                return EventRecoDetail(seq, box)  # agent 模式无 reco_id，用 seq 标识
+            box = cap.take_by_reco_id(reco_id)
+            if box is not MISS:
+                return EventRecoDetail(reco_id, box)
             if time.time() >= deadline:
                 return None
             time.sleep(0.02)
@@ -237,14 +233,35 @@ class MaaBridge(SMContext):
         if is_missing(node):
             raise MissingImageError(describe_missing(node))
         try:
-            detail = self._ctx.run_recognition(node, image)
+            # 直调 C API 拿 reco_id——绑定版 run_recognition 在
+            # GetRecognitionDetail 失败（v5.8.1 必然）后吞掉 reco_id
+            # 返回 None，事件兜底就失去关联键
+            reco_id = self._post_reco(node, image)
         except Exception as e:
             raise SMError(f"识别 {node} 失败: {e}") from e
-        if detail is None:
-            # MAA v5.8.1：run_recognition 的详情获取
-            # （GetRecognitionDetail）对 Context 识别必然失败 → 事件兜底
-            detail = self._detail_from_event(node)
-        return detail
+        if not reco_id:
+            return None
+        try:
+            detail = self._ctx.tasker.get_recognition_detail(reco_id)
+        except Exception:
+            detail = None
+        if detail is not None:
+            return detail
+        # MAA v5.8.1：Context 识别的 GetRecognitionDetail 必然失败 → 事件兜底
+        return self._detail_from_event(reco_id)
+
+    def _post_reco(self, node: str, image: "object") -> int:
+        """MaaContextRunRecognition 直调，返回 reco_id（失败返回 0）。"""
+        from maa.buffer import ImageBuffer
+        from maa.library import Library
+
+        buf = ImageBuffer()
+        buf.set(image)
+        return int(Library.framework().MaaContextRunRecognition(
+            self._ctx._handle,
+            *Context._gen_post_param(node, {}),
+            buf._handle,
+        ))
 
     def _pinch(self, cx: int, cy: int, dist: int, inward: bool) -> None:
         """双指水平捏合缩放。inward=False 手指张开=放大，True 手指收拢=缩小。

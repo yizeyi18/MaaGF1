@@ -185,6 +185,11 @@ def register_tools(server: "object") -> None:
         return _call("get_resource_info")
 
     @server.tool()
+    def reco_debug(session_id: str = "") -> object:
+        """诊断识别事件兜底链路（v5.8.1）：sink 注册/捕获留存/最近消息/兜底轨迹。"""
+        return _call("reco_debug", session_id=session_id)
+
+    @server.tool()
     def check_state(session_id: str, state_name: str = "") -> object:
         """定位当前界面状态（SM 状态表）；state_name 非空时只验证该状态。"""
         return _call("check_state", session_id=session_id, state_name=state_name)
@@ -232,6 +237,7 @@ _IMPL: Dict[str, Any] = {
     "task_status": T.tool_task_status,
     "update_resources": T.tool_update_resources,
     "get_resource_info": T.tool_get_resource_info,
+    "reco_debug": T.tool_reco_debug,
     "check_state": T.tool_check_state,
     "run_sm_8_1n": T.tool_run_sm_8_1n,
     "stop_sm": T.tool_stop_sm,

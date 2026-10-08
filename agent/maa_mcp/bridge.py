@@ -175,8 +175,18 @@ class TaskerBridge(SMContext):
         while True:
             box = cap.take_by_taskid(task_id)
             if box is not MISS:
+                self._session.reco_last_lookup = {
+                    "task_id": task_id, "found": True,
+                    "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
                 return EventRecoDetail(task_id, box)
             if time.time() >= deadline:
+                # 未命中：留存诊断快照（reco_debug 工具可查）
+                self._session.reco_last_lookup = {
+                    "task_id": task_id, "found": False,
+                    "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "capture": cap.snapshot(),
+                }
                 return None
             time.sleep(0.05)
 

@@ -615,6 +615,22 @@ def _sm_flow():
     return build_flow_81n(rounds=1)
 
 
+def tool_reco_debug(hub: "object", session_id: str = "") -> Dict[str, Any]:
+    """诊断识别事件兜底链路（v5.8.1 GetRecognitionDetail 失败绕过）。
+
+    返回：sink 是否注册、捕获器留存事件、最近收到的原始消息、
+    最近一次兜底查询轨迹（task_id / 是否命中 / 时刻）。
+    """
+    s = _resolve_session(hub, session_id)
+    cap = getattr(s, "_reco_capture", None)
+    return {
+        "session_id": s.id,
+        "sink_registered": cap is not None,
+        "capture": cap.snapshot() if cap is not None else None,
+        "last_lookup": s.reco_last_lookup,
+    }
+
+
 def tool_check_state(hub: "object", session_id: str, state_name: str = "") -> Dict[str, Any]:
     """定位当前界面状态（SM 状态表）。state_name 非空时只验证该状态。"""
     from sm.core import Runner

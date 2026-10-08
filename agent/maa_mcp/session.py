@@ -43,6 +43,7 @@ class Session:
         self._task_lock = threading.Lock()
         self._reco_capture: "object" = None
         self._reco_lock = threading.Lock()
+        self.reco_last_lookup: "object" = None  # 诊断：最近一次事件兜底查询轨迹
 
     @property
     def reco_capture(self):
