@@ -32,6 +32,10 @@ class _TaskState:
         return int((end - self.started_at) * 1000)
 
 
+#: reco_capture 属性：绑定不支持事件捕获时的占位（与 None=未初始化区分）
+_RECO_DISABLED = object()
+
+
 class Session:
     def __init__(self, hub: "object", sid: str, name: str = ""):
         self.hub = hub
@@ -60,8 +64,14 @@ class Session:
             with self._reco_lock:
                 cap = self._reco_capture
                 if cap is None:
-                    from sm.reco_capture import RecoEventCapture
-                    cap = RecoEventCapture()
+                    try:
+                        from sm.reco_capture import RecoEventCapture
+                        cap = RecoEventCapture()
+                    except Exception:
+                        # 绑定无 maa.event_sink 等 → 兜底不可用
+                        # （缓存失败避免每次重复 import；官方 API 仍第一选择）
+                        self._reco_capture = _RECO_DISABLED
+                        return None
                     # 必须挂 context sink（MaaTaskerAddContextSink）：
                     # Node.* 识别事件走 context_notifier_，add_sink 挂的
                     # 是 tasker 级通知器，只收 Tasker.Task.*（线上实证：
@@ -70,9 +80,9 @@ class Session:
                     try:
                         self.tasker.add_context_sink(cap)  # _sink_holder 持引用防 GC
                     except Exception:
-                        pass  # 注册失败则兜底不可用，官方 API 仍是第一选择
+                        pass  # tasker 不支持 context sink → 兜底不可用
                     self._reco_capture = cap
-        return cap
+        return None if cap is _RECO_DISABLED else cap
 
     # ---------------- 任务 ----------------
 
