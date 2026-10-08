@@ -67,7 +67,10 @@ class Session:
                     # 是 tasker 级通知器，只收 Tasker.Task.*（线上实证：
                     # tasker sink 的 recent_msgs 里全是 Tasker.Task.*，
                     # 一条 Node.Recognition.* 都没有）
-                    self.tasker.add_context_sink(cap)  # _sink_holder 持引用防 GC
+                    try:
+                        self.tasker.add_context_sink(cap)  # _sink_holder 持引用防 GC
+                    except Exception:
+                        pass  # 注册失败则兜底不可用，官方 API 仍是第一选择
                     self._reco_capture = cap
         return cap
 

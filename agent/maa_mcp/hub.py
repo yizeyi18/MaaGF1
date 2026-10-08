@@ -272,6 +272,10 @@ class GameHub:
             if not t.bind(self._resource, self._controller):
                 raise InfraError(f"Tasker.bind 失败（session {sid}）")
             s.tasker = t
+            # 立即注册识别事件捕获——识别事件只发一次，若懒注册到
+            # 第一次识别之后，该识别的事件就错过了（线上实证：首个
+            # 走兜底的 match 必 MISS +2s，check_state 首个检查之后全快）
+            s.reco_capture
             self.sessions[sid] = s
             return s
 

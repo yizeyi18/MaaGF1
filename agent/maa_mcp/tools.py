@@ -220,6 +220,7 @@ def _default_session(hub: "object") -> "object":
             if not t.bind(hub._resource, hub._controller):
                 raise InfraError("Tasker.bind 失败（default session）")
             s.tasker = t
+            s.reco_capture  # 立即注册识别事件捕获（见 hub.create_session）
             hub.sessions["default"] = s
             return s
     return hub.sessions["default"]
