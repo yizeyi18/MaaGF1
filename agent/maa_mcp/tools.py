@@ -73,22 +73,33 @@ def tool_read_logs(hub: "object", source: str = "all", lines: int = 100,
     source=all 全要；source=framework 只要框架日志；也可传具体文件 key；
     pattern 过滤行（优先正则，非法正则按子串）；lines 每来源最多返回行数（≤500，取尾部）。
     """
-    # 候选 debug 目录：包根（GUI 的 CWD）、exe 目录（伴生进程 CWD 固定于此）、进程 CWD
+    # 候选 debug 目录：包根（GUI 的 CWD）、exe 目录（伴生进程 CWD 固定于此）、
+    # runtimes 目录（maa_option.json 会把日志目录改到 runtimes/*/native/debug，
+    # 若 set_log_dir 时机不对日志就落在那里）、进程 CWD
     candidates = [
-        ("root", os.path.join(hub.project_root, "debug")),
-        ("exe", os.path.join(hub.exe_dir, "debug")),
-        ("cwd", os.path.join(os.getcwd(), "debug")),
+        ("root/debug", os.path.join(hub.project_root, "debug")),
+        ("exe/debug", os.path.join(hub.exe_dir, "debug")),
+        ("cwd/debug", os.path.join(os.getcwd(), "debug")),
     ]
+    runtimes = os.path.join(hub.project_root, "runtimes")
+    if os.path.isdir(runtimes):
+        try:
+            import glob as _glob
+            for d in sorted(_glob.glob(os.path.join(runtimes, "*", "native", "debug"))):
+                prefix = os.path.relpath(d, hub.project_root).replace(os.sep, "/")
+                candidates.append((prefix, d))
+        except Exception:
+            pass
     files: Dict[str, str] = {}
     seen_dirs = set()
-    for label, d in candidates:
+    for prefix, d in candidates:
         rd = os.path.realpath(d)
         if not os.path.isdir(d) or rd in seen_dirs:
             continue
         seen_dirs.add(rd)
         for fn in sorted(os.listdir(d)):
             if fn.lower().endswith(".log"):
-                files[f"{label}/debug/{fn}"] = os.path.join(d, fn)
+                files[f"{prefix}/{fn}"] = os.path.join(d, fn)
     for label, p in (("exe", os.path.join(hub.exe_dir, "maa_mcp.log")),
                      ("root", os.path.join(hub.project_root, "maa_mcp.log"))):
         if os.path.isfile(p) and os.path.realpath(p) not in {os.path.realpath(v) for v in files.values()}:
