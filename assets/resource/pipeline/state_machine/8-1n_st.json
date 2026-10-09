@@ -1,259 +1,481 @@
 {
-	"$schema": "https://maaxyy.com/schemas/pipeline.json",
-	"$说明": "状态机检查节点（8-1N）。全部为纯识别节点：供 agent/sm 状态机做状态检查与锚点点击（识别命中框中心）。坐标/阈值均映射自现有 8-1N pipeline（进入/部署/编队/战斗/重置/地图初始化）。",
-	"SM81N_stage_list": {
-		"recognition": "TemplateMatch",
-		"template": "combat/levelUp/8-1N/run8_1N.png",
-		"green_mask": true,
-		"next": []
-	},
-	"SM81N_stage_detail": {
-		"recognition": "OCR",
-		"roi": [828, 527, 329, 142],
-		"expected": ["普通作战"],
-		"next": []
-	},
-	"SM81N_map": {
-		"recognition": "TemplateMatch",
-		"roi": [366, 361, 114, 117],
-		"template": "combat/levelUp/8-1N/init.png",
-		"threshold": 0.5,
-		"next": []
-	},
-	"$t说明": "t1/t2/t3 为全屏搜索（无 ROI）：地图可被拖动（平移），固定 ROI 在平移偏离后必然失效；徽章存在性判定与锚点点击在全屏搜索下平移鲁棒。SM81N_map 背景保留固定 ROI（计划屏需靠它排除地图态；平移由流程入口/轮首的平移归一化步骤制备回参考位）。",
-	"SM81N_map_landmark": {
-		"recognition": "TemplateMatch",
-		"template": "combat/levelUp/8-1N/map_landmark.png",
-		"threshold": 0.7,
-		"next": []
-	},
-	"SM81N_map_t1": {
-		"recognition": "TemplateMatch",
-		"template": "combat/levelUp/8-1N/map_team1.png",
-		"threshold": 0.5,
-		"next": []
-	},
-	"SM81N_map_t2": {
-		"recognition": "TemplateMatch",
-		"template": "combat/levelUp/8-1N/map_team2.png",
-		"threshold": 0.5,
-		"next": []
-	},
-	"SM81N_map_t3": {
-		"recognition": "TemplateMatch",
-		"template": [
-			"combat/levelUp/8-1N/map_team3.png",
-			"combat/levelUp/8-1N/map_teamh.png"
-		],
-		"threshold": 0.5,
-		"next": []
-	},
-	"SM81N_port1": {
-		"recognition": "TemplateMatch",
-		"roi": [115, 488, 261, 231],
-		"template": "combat/levelUp/8-1N/port_1.png",
-		"threshold": 0.5,
-		"next": []
-	},
-	"SM81N_port2": {
-		"recognition": "TemplateMatch",
-		"roi": [179, 78, 277, 233],
-		"template": "combat/levelUp/8-1N/port_2.png",
-		"threshold": 0.5,
-		"next": []
-	},
-	"SM81N_porth": {
-		"recognition": "TemplateMatch",
-		"roi": [947, 101, 298, 316],
-		"template": "combat/levelUp/8-1N/port_h.png",
-		"threshold": 0.6,
-		"next": []
-	},
-	"SM81N_deploy_confirm": {
-		"recognition": "OCR",
-		"roi": [1071, 592, 192, 88],
-		"expected": ["确定", "部署"],
-		"next": []
-	},
-	"SM81N_ammo_full": {
-		"recognition": "TemplateMatch",
-		"roi": [144, 74, 473, 184],
-		"template": "combat/levelUp/8-1N/Gnewfullammo.png",
-		"green_mask": true,
-		"threshold": 0.7,
-		"next": []
-	},
-	"SM81N_ammo_empty": {
-		"recognition": "TemplateMatch",
-		"roi": [144, 74, 473, 184],
-		"template": "combat/levelUp/8-1N/Gnewnoammo.png",
-		"green_mask": true,
-		"threshold": 0.7,
-		"next": []
-	},
-	"SM81N_formation": {
-		"recognition": "OCR",
-		"roi": [1067, 634, 212, 85],
-		"expected": "阵型编成",
-		"next": []
-	},
-	"SM81N_charselect": {
-		"recognition": "OCR",
-		"roi": [1044, 202, 207, 136],
-		"$说明": "选人屏右上'显示种类'按钮：无筛选=显示全部，收藏筛选生效=选择中（筛选是持久设置，跨轮保持，两种标签都算选人屏）",
-		"expected": ["显示全部", "选择中"],
-		"next": []
-	},
-	"SM81N_filter_all": {
-		"recognition": "OCR",
-		"roi": [1044, 202, 207, 136],
-		"$说明": "'显示种类'按钮标签=显示全部 ⇔ 收藏筛选关闭。用于幂等 toggle：只在筛选关闭时点'收藏'，已开启则跳过（防重点击把筛选关掉）",
-		"expected": ["显示全部"],
-		"next": []
-	},
-	"SM81N_fav_filter": {
-		"recognition": "OCR",
-		"roi": [830, 69, 243, 117],
-		"expected": ["显示", "收藏"],
-		"next": []
-	},
-	"SM81N_fav_confirm": {
-		"recognition": "OCR",
-		"roi": [892, 628, 109, 69],
-		"expected": ["确认"],
-		"next": []
-	},
-	"SM81N_team_char": {
-		"recognition": "TemplateMatch",
-		"template": "combat/levelUp/8-1N/G_team1.png",
-		"green_mask": true,
-		"threshold": 0.8,
-		"next": []
-	},
-	"SM81N_formation_confirm": {
-		"recognition": "OCR",
-		"roi": [1094, 591, 153, 93],
-		"expected": ["确定"],
-		"next": []
-	},
-	"SM81N_back2map": {
-		"recognition": "TemplateMatch",
-		"roi": [33, 0, 156, 166],
-		"template": "combat/levelUp/8-1N/back2map.png",
-		"next": []
-	},
-	"SM81N_battle": {
-		"recognition": "OCR",
-		"roi": [1138, 104, 90, 61],
-		"expected": "妖精",
-		"next": []
-	},
-	"SM81N_bar_end": {
-		"recognition": "OCR",
-		"roi": [1079, 590, 200, 124],
-		"expected": ["结束"],
-		"next": []
-	},
-	"SM81N_start": {
-		"recognition": "OCR",
-		"roi": [944, 571, 335, 148],
-		"expected": ["开始作战"],
-		"next": []
-	},
-	"SM81N_equip_overflow": {
-		"recognition": "OCR",
-		"roi": [775, 290, 169, 82],
-		"expected": ["装备强化"],
-		"next": []
-	},
-	"SM81N_supply": {
-		"recognition": "OCR",
-		"roi": [1049, 505, 229, 95],
-		"expected": ["补给"],
-		"next": []
-	},
-	"SM81N_popup_withdraw": {
-		"recognition": "OCR",
-		"roi": [956, 595, 101, 83],
-		"expected": ["撤离"],
-		"next": []
-	},
-	"SM81N_confirm_dialog": {
-		"recognition": "OCR",
-		"expected": ["确定"],
-		"next": []
-	},
-	"SM81N_plan": {
-		"recognition": "OCR",
-		"roi": [1086, 606, 182, 113],
-		"expected": ["执行"],
-		"next": []
-	},
-	"SM81N_dog1": {
-		"recognition": "TemplateMatch",
-		"roi": [165, 423, 202, 204],
-		"template": "combat/levelUp/8-1N/dog1.png",
-		"next": []
-	},
-	"SM81N_ap2": {
-		"recognition": "TemplateMatch",
-		"roi": [987, 617, 100, 102],
-		"template": "public/计划点数2.png",
-		"threshold": 0.75,
-		"next": []
-	},
-	"SM81N_ap1": {
-		"recognition": "TemplateMatch",
-		"roi": [961, 606, 126, 113],
-		"template": "combat/levelUp/8-1N/Gap1.png",
-		"green_mask": true,
-		"threshold": 0.7,
-		"next": []
-	},
-	"SM81N_t1wd": {
-		"recognition": "OCR",
-		"roi": [884, 606, 189, 81],
-		"expected": ["撤离"],
-		"next": []
-	},
-	"SM81N_withdraw_confirm": {
-		"recognition": "OCR",
-		"roi": [665, 429, 189, 127],
-		"expected": ["确定"],
-		"next": []
-	},
-	"SM81N_redeploy": {
-		"recognition": "OCR",
-		"roi": [398, 459, 205, 68],
-		"expected": ["重新"],
-		"next": []
-	},
-	"SM81N_settlement": {
-		"recognition": "OCR",
-		"roi": [20, 25, 200, 60],
-		"$说明": "战斗结算屏标题（执行计划后的过场，约数秒）。仅作定位/日志用，点击无效区",
-		"expected": ["战斗结算"],
-		"next": []
-	},
-	"SM81N_squad1_zero": {
-		"recognition": "OCR",
-		"roi": [140, 521, 910, 22],
-		"$说明": "战前机场框（1队打开时）5名成员'弹药 X/Y'行。\\b0/ = 有成员弹药为 0（打手已耗空）；入口检查直接读 1队，不用 2队 代理推断。ROI 只含弹药行（生命行在上、口粮行在下，均排除）",
-		"expected": ["\\b0/", "\\b0$"],
-		"next": []
-	},
-	"SM81N_box_cancel": {
-		"recognition": "OCR",
-		"roi": [1080, 600, 170, 70],
-		"$说明": "战前机场框右下'取消'按钮（关闭弹窗，不编队）",
-		"expected": ["取消"],
-		"next": []
-	},
-	"SM81N_deploy_list_first": {
-		"recognition": "OCR",
-		"roi": [673, 138, 165, 443],
-		"$说明": "重装机场'选择重装部队'tab 下第一个单位行（映射 部署.json 81N部署_部署重装选择）；命中框即第一单位",
-		"expected": ["BGM", "AGS", "G", "等级"],
-		"next": []
-	}
+ "$schema": "https://maaxyy.com/schemas/pipeline.json",
+ "$说明": "状态机检查节点（8-1N）。全部为纯识别节点：供 agent/sm 状态机做状态检查与锚点点击（识别命中框中心）。坐标/阈值均映射自现有 8-1N pipeline（进入/部署/编队/战斗/重置/地图初始化）。",
+ "SM81N_stage_list": {
+  "recognition": "TemplateMatch",
+  "template": "combat/levelUp/8-1N/run8_1N.png",
+  "green_mask": true,
+  "next": []
+ },
+ "SM81N_stage_detail": {
+  "recognition": "OCR",
+  "roi": [
+   828,
+   527,
+   329,
+   142
+  ],
+  "expected": [
+   "普通作战"
+  ],
+  "next": []
+ },
+ "SM81N_map": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   366,
+   361,
+   114,
+   117
+  ],
+  "template": "combat/levelUp/8-1N/init.png",
+  "threshold": 0.5,
+  "next": []
+ },
+ "$t说明": "t1/t2/t3 为全屏搜索（无 ROI）：地图可被拖动（平移），固定 ROI 在平移偏离后必然失效；徽章存在性判定与锚点点击在全屏搜索下平移鲁棒。SM81N_map 背景保留固定 ROI（计划屏需靠它排除地图态；平移由流程入口/轮首的平移归一化步骤制备回参考位）。",
+ "SM81N_map_landmark": {
+  "recognition": "TemplateMatch",
+  "template": "combat/levelUp/8-1N/map_landmark.png",
+  "threshold": 0.7,
+  "next": []
+ },
+ "SM81N_map_t1": {
+  "recognition": "TemplateMatch",
+  "template": "combat/levelUp/8-1N/map_team1.png",
+  "threshold": 0.5,
+  "next": []
+ },
+ "SM81N_map_t2": {
+  "recognition": "TemplateMatch",
+  "template": "combat/levelUp/8-1N/map_team2.png",
+  "threshold": 0.5,
+  "next": []
+ },
+ "SM81N_map_t3": {
+  "recognition": "TemplateMatch",
+  "template": [
+   "combat/levelUp/8-1N/map_team3.png",
+   "combat/levelUp/8-1N/map_teamh.png"
+  ],
+  "threshold": 0.5,
+  "next": []
+ },
+ "SM81N_port1": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   115,
+   488,
+   261,
+   231
+  ],
+  "template": "combat/levelUp/8-1N/port_1.png",
+  "threshold": 0.5,
+  "next": []
+ },
+ "SM81N_port2": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   179,
+   78,
+   277,
+   233
+  ],
+  "template": "combat/levelUp/8-1N/port_2.png",
+  "threshold": 0.5,
+  "next": []
+ },
+ "SM81N_porth": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   947,
+   101,
+   298,
+   316
+  ],
+  "template": "combat/levelUp/8-1N/port_h.png",
+  "threshold": 0.6,
+  "next": []
+ },
+ "SM81N_deploy_confirm": {
+  "recognition": "OCR",
+  "roi": [
+   1071,
+   592,
+   192,
+   88
+  ],
+  "expected": [
+   "确定",
+   "部署"
+  ],
+  "next": []
+ },
+ "SM81N_ammo_full": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   144,
+   74,
+   473,
+   184
+  ],
+  "template": "combat/levelUp/8-1N/Gnewfullammo.png",
+  "green_mask": true,
+  "threshold": 0.7,
+  "next": []
+ },
+ "SM81N_ammo_empty": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   144,
+   74,
+   473,
+   184
+  ],
+  "template": "combat/levelUp/8-1N/Gnewnoammo.png",
+  "green_mask": true,
+  "threshold": 0.7,
+  "next": []
+ },
+ "SM81N_formation": {
+  "recognition": "OCR",
+  "roi": [
+   1067,
+   634,
+   212,
+   85
+  ],
+  "expected": "阵型编成",
+  "next": []
+ },
+ "SM81N_charselect": {
+  "recognition": "OCR",
+  "roi": [
+   1044,
+   202,
+   207,
+   136
+  ],
+  "$说明": "选人屏右上'显示种类'按钮：无筛选=显示全部，收藏筛选生效=选择中（筛选是持久设置，跨轮保持，两种标签都算选人屏）",
+  "expected": [
+   "显示全部",
+   "选择中"
+  ],
+  "next": []
+ },
+ "SM81N_filter_all": {
+  "recognition": "OCR",
+  "roi": [
+   1044,
+   202,
+   207,
+   136
+  ],
+  "$说明": "'显示种类'按钮标签=显示全部 ⇔ 收藏筛选关闭。用于幂等 toggle：只在筛选关闭时点'收藏'，已开启则跳过（防重点击把筛选关掉）",
+  "expected": [
+   "显示全部"
+  ],
+  "next": []
+ },
+ "SM81N_fav_filter": {
+  "recognition": "OCR",
+  "roi": [
+   830,
+   69,
+   243,
+   117
+  ],
+  "expected": [
+   "显示",
+   "收藏"
+  ],
+  "next": []
+ },
+ "SM81N_fav_confirm": {
+  "recognition": "OCR",
+  "roi": [
+   892,
+   628,
+   109,
+   69
+  ],
+  "expected": [
+   "确认"
+  ],
+  "next": []
+ },
+ "SM81N_popup_confirm": {
+  "recognition": "TemplateMatch",
+  "template": "combat/levelUp/8-1N/popup_confirm_btn.png",
+  "roi": [
+   790,
+   640,
+   310,
+   80
+  ],
+  "threshold": 0.75,
+  "$说明": "选人·筛选弹层的橙色'确认'按钮（弹层打开时独有；基础屏'确定'在 x>=1100 被 ROI 排除）。模板比 OCR 稳：弹层检测/点击目标都走它",
+  "next": []
+ },
+ "SM81N_team_char": {
+  "recognition": "TemplateMatch",
+  "template": "combat/levelUp/8-1N/G_team1.png",
+  "green_mask": true,
+  "threshold": 0.8,
+  "next": []
+ },
+ "SM81N_formation_confirm": {
+  "recognition": "OCR",
+  "roi": [
+   1094,
+   591,
+   153,
+   93
+  ],
+  "expected": [
+   "确定"
+  ],
+  "next": []
+ },
+ "SM81N_back2map": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   33,
+   0,
+   156,
+   166
+  ],
+  "template": "combat/levelUp/8-1N/back2map.png",
+  "next": []
+ },
+ "SM81N_battle": {
+  "recognition": "OCR",
+  "roi": [
+   1138,
+   104,
+   90,
+   61
+  ],
+  "expected": "妖精",
+  "next": []
+ },
+ "SM81N_bar_end": {
+  "recognition": "OCR",
+  "roi": [
+   1079,
+   590,
+   200,
+   124
+  ],
+  "expected": [
+   "结束"
+  ],
+  "next": []
+ },
+ "SM81N_start": {
+  "recognition": "OCR",
+  "roi": [
+   944,
+   571,
+   335,
+   148
+  ],
+  "expected": [
+   "开始作战"
+  ],
+  "next": []
+ },
+ "SM81N_equip_overflow": {
+  "recognition": "OCR",
+  "roi": [
+   775,
+   290,
+   169,
+   82
+  ],
+  "expected": [
+   "装备强化"
+  ],
+  "next": []
+ },
+ "SM81N_supply": {
+  "recognition": "OCR",
+  "roi": [
+   1049,
+   505,
+   229,
+   95
+  ],
+  "expected": [
+   "补给"
+  ],
+  "next": []
+ },
+ "SM81N_popup_withdraw": {
+  "recognition": "OCR",
+  "roi": [
+   956,
+   595,
+   101,
+   83
+  ],
+  "expected": [
+   "撤离"
+  ],
+  "next": []
+ },
+ "SM81N_confirm_dialog": {
+  "recognition": "OCR",
+  "expected": [
+   "确定"
+  ],
+  "next": []
+ },
+ "SM81N_plan": {
+  "recognition": "OCR",
+  "roi": [
+   1086,
+   606,
+   182,
+   113
+  ],
+  "expected": [
+   "执行"
+  ],
+  "next": []
+ },
+ "SM81N_dog1": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   165,
+   423,
+   202,
+   204
+  ],
+  "template": "combat/levelUp/8-1N/dog1.png",
+  "next": []
+ },
+ "SM81N_ap2": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   987,
+   617,
+   100,
+   102
+  ],
+  "template": "public/计划点数2.png",
+  "threshold": 0.75,
+  "next": []
+ },
+ "SM81N_ap1": {
+  "recognition": "TemplateMatch",
+  "roi": [
+   961,
+   606,
+   126,
+   113
+  ],
+  "template": "combat/levelUp/8-1N/Gap1.png",
+  "green_mask": true,
+  "threshold": 0.7,
+  "next": []
+ },
+ "SM81N_t1wd": {
+  "recognition": "OCR",
+  "roi": [
+   884,
+   606,
+   189,
+   81
+  ],
+  "expected": [
+   "撤离"
+  ],
+  "next": []
+ },
+ "SM81N_withdraw_confirm": {
+  "recognition": "OCR",
+  "roi": [
+   665,
+   429,
+   189,
+   127
+  ],
+  "expected": [
+   "确定"
+  ],
+  "next": []
+ },
+ "SM81N_redeploy": {
+  "recognition": "OCR",
+  "roi": [
+   398,
+   459,
+   205,
+   68
+  ],
+  "expected": [
+   "重新"
+  ],
+  "next": []
+ },
+ "SM81N_settlement": {
+  "recognition": "OCR",
+  "roi": [
+   20,
+   25,
+   200,
+   60
+  ],
+  "$说明": "战斗结算屏标题（执行计划后的过场，约数秒）。仅作定位/日志用，点击无效区",
+  "expected": [
+   "战斗结算"
+  ],
+  "next": []
+ },
+ "SM81N_squad1_zero": {
+  "recognition": "OCR",
+  "roi": [
+   140,
+   521,
+   910,
+   22
+  ],
+  "$说明": "战前机场框（1队打开时）5名成员'弹药 X/Y'行。\\b0/ = 有成员弹药为 0（打手已耗空）；入口检查直接读 1队，不用 2队 代理推断。ROI 只含弹药行（生命行在上、口粮行在下，均排除）",
+  "expected": [
+   "\\b0/",
+   "\\b0$"
+  ],
+  "next": []
+ },
+ "SM81N_box_cancel": {
+  "recognition": "OCR",
+  "roi": [
+   1080,
+   600,
+   170,
+   70
+  ],
+  "$说明": "战前机场框右下'取消'按钮（关闭弹窗，不编队）",
+  "expected": [
+   "取消"
+  ],
+  "next": []
+ },
+ "SM81N_deploy_list_first": {
+  "recognition": "OCR",
+  "roi": [
+   673,
+   138,
+   165,
+   443
+  ],
+  "$说明": "重装机场'选择重装部队'tab 下第一个单位行（映射 部署.json 81N部署_部署重装选择）；命中框即第一单位",
+  "expected": [
+   "BGM",
+   "AGS",
+   "G",
+   "等级"
+  ],
+  "next": []
+ }
 }

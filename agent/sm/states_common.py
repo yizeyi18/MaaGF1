@@ -55,13 +55,17 @@ S_FORMATION = State(
 )
 
 #: 编成-角色选择·筛选弹层（点"显示种类"后打开的大弹层）——特征 =
-#: "仅显示收藏角色"复选框文案 + 弹层"确认"按钮（两者只在弹层打开时可见；
-#: 弹层打开时基础屏的"显示种类"标签仍在右上可见，故本状态优先级必须
-#: 高于 charselect/charselect_shown）。
-#: 2026-10-09 实机截图测量：复选框 (905,137)，确认 (940,670)。
+#: 弹层橙色"确认"按钮模板（SM81N_popup_confirm，弹层打开时独有；
+#: 基础屏"确定"按钮在 x>=1100 被节点 ROI 排除）。
+#: 2026-10-09 实机教训：弹层检测最初用 OCR（fav_filter 文案 +
+#: fav_confirm"确认"），同一屏 guard 命中、0.5s 后 unless 检查 miss
+#: （OCR 抖动）→ 兜底重开动作误点"显示种类"把弹层关掉 → 转移全灭。
+#: 改模板匹配（静态 UI 按钮，确定性识别）。
+#: 弹层打开时基础屏的"显示种类"标签仍在右上可见（charselect 节点也命中），
+#: 故本状态优先级必须高于 charselect/charselect_shown。
 S_CHARSELECT_FILTER = State(
     name="charselect_filter",
-    checks=[CheckSpec("SM81N_fav_filter"), CheckSpec("SM81N_fav_confirm")],
+    checks=[CheckSpec("SM81N_popup_confirm")],
     desc="编成-角色选择·筛选弹层（显示种类已展开）",
     locate_priority=18,
 )

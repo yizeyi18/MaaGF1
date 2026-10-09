@@ -385,9 +385,10 @@ def transitions_81n() -> list[Transition]:
                 _click(234, 339),  # 2队打手槽位卡（原 target [193,278,82,123] 中心）
                 ActionSpec(kind="wait", ms=500),
             ],
-            # 到达选人屏·基础屏（弹层必须关闭：弹层"确认"只在弹层内可见）
+            # 到达选人屏·基础屏（弹层必须关闭：弹层"确认"按钮模板只在
+            # 弹层内可见，模板检测确定性高，不用 OCR）
             post_check=[C("SM81N_charselect"),
-                        C("SM81N_fav_confirm", inverted=True)],
+                        C("SM81N_popup_confirm", inverted=True)],
             max_retries=3,
         ),
         Transition(
@@ -398,8 +399,8 @@ def transitions_81n() -> list[Transition]:
                 _anchor("SM81N_charselect"),
                 ActionSpec(kind="wait", ms=400),
             ],
-            # 弹层打开 ⇔ "仅显示收藏角色" + 弹层"确认" 同屏可见
-            post_check=[C("SM81N_fav_filter"), C("SM81N_fav_confirm")],
+            # 弹层打开 ⇔ 弹层橙色"确认"按钮模板可见
+            post_check=[C("SM81N_popup_confirm")],
             max_retries=5, retry_wait_ms=1000,
         ),
         Transition(
@@ -409,21 +410,24 @@ def transitions_81n() -> list[Transition]:
             # 首动作 unless_node 兜底：若弹层已关（上轮确认被吞/重试错位），
             # 先重开（重开的弹层复选框反映当前筛选态 → 后续勾选必然
             # 收敛；post_check 校验最终态，失败重试继续收敛）。
+            # unless 用弹层"确认"按钮模板（确定性检测，OCR 抖动会误重开
+            # 把弹层点关——2026-10-09 实机教训）。
             # 复选框是 toggle：若已勾选（上次点中、确认被吞）会先取消，
             # 本轮 post_check 失败 → 重试时弹层已关 → 重开 → 重新勾选。
             from_state="charselect_filter", to_state="charselect_shown",
             actions=[
-                _anchor("SM81N_charselect", unless_node="SM81N_fav_confirm"),
+                _anchor("SM81N_charselect", unless_node="SM81N_popup_confirm"),
                 ActionSpec(kind="wait", ms=300),
-                _anchor("SM81N_fav_filter"),
+                # 复选框图标在 OCR 文案框中心偏左 ~60px（实测 908,131）
+                _anchor("SM81N_fav_filter", dx=-60, dy=0),
                 ActionSpec(kind="wait", ms=300),
-                _anchor("SM81N_fav_confirm"),
+                _anchor("SM81N_popup_confirm"),
                 ActionSpec(kind="wait", ms=500),
             ],
             # 回基础屏 + 筛选生效（标签=选择中）+ 弹层已关
             post_check=[C("SM81N_charselect"),
                         C("SM81N_filter_all", inverted=True),
-                        C("SM81N_fav_confirm", inverted=True)],
+                        C("SM81N_popup_confirm", inverted=True)],
             max_retries=5, retry_wait_ms=1000,
         ),
         Transition(
@@ -432,12 +436,56 @@ def transitions_81n() -> list[Transition]:
             # （恢复/退出弹层用；两状态间的检查边）。
             from_state="charselect_filter", to_state="charselect",
             actions=[
-                _anchor("SM81N_fav_confirm"),
+                _anchor("SM81N_popup_confirm"),
                 ActionSpec(kind="wait", ms=500),
             ],
             post_check=[C("SM81N_charselect"),
-                        C("SM81N_fav_confirm", inverted=True)],
+                        C("SM81N_popup_confirm", inverted=True)],
             max_retries=5, retry_wait_ms=1000,
+        ),
+
+        # ---------- 恢复边：流中断在选人屏族时，重跑入口 goto map_full
+        # 可直接两步返回（← 返回 选人→编成→地图；弹层态先关弹层） ----------
+        Transition(
+            name="T_charselect__map_full",
+            from_state="charselect", to_state="map_full",
+            actions=[
+                _anchor("SM81N_back2map"),
+                ActionSpec(kind="wait", ms=1200),
+                _anchor("SM81N_back2map"),
+                ActionSpec(kind="wait", ms=1500),
+            ],
+            post_check=[C("SM81N_map"), C("SM81N_map_t1"), C("SM81N_map_t2"),
+                        C("SM81N_map_t3"), C("SM81N_start")],
+            max_retries=3,
+        ),
+        Transition(
+            name="T_charselect_shown__map_full",
+            from_state="charselect_shown", to_state="map_full",
+            actions=[
+                _anchor("SM81N_back2map"),
+                ActionSpec(kind="wait", ms=1200),
+                _anchor("SM81N_back2map"),
+                ActionSpec(kind="wait", ms=1500),
+            ],
+            post_check=[C("SM81N_map"), C("SM81N_map_t1"), C("SM81N_map_t2"),
+                        C("SM81N_map_t3"), C("SM81N_start")],
+            max_retries=3,
+        ),
+        Transition(
+            name="T_charselect_filter__map_full",
+            from_state="charselect_filter", to_state="map_full",
+            actions=[
+                _anchor("SM81N_popup_confirm"),
+                ActionSpec(kind="wait", ms=500),
+                _anchor("SM81N_back2map"),
+                ActionSpec(kind="wait", ms=1200),
+                _anchor("SM81N_back2map"),
+                ActionSpec(kind="wait", ms=1500),
+            ],
+            post_check=[C("SM81N_map"), C("SM81N_map_t1"), C("SM81N_map_t2"),
+                        C("SM81N_map_t3"), C("SM81N_start")],
+            max_retries=3,
         ),
         Transition(
             name="T_charselect__formation",
