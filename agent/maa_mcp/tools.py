@@ -267,16 +267,24 @@ def _run_node_recognition(hub: "object", s: "object", node_data: Dict[str, Any],
             "timeout": 3000}  # 未命中重试窗口：默认 20s 太长，3s 足够判定
     job = s.tasker.post_task(entry, pipeline_override={entry: node})
     job.wait()
-    nd = _node_detail_from_job(job, entry) or s.tasker.get_latest_node(entry)
-    if nd is not None and nd.recognition is not None:
-        return nd.recognition
-    # MAA v5.8.1：GetRecognitionDetail 必然失败（TaskDetail 的节点
-    # recognition 同源）→ 事件兜底：Node.Recognition.* 事件带 task_id
-    # （== job.job_id）+ reco_details.box，命中/未命中都能区分
+    # 事件兜底是【主路径】：Node.Recognition.Succeeded/Failed 事件带
+    # 本任务 task_id（== job.job_id）+ reco_details.box，命中/未命中
+    # 都可靠（未命中=box null）。
+    #
+    # 官方 detail（job.get() 的节点 recognition / get_latest_node）在
+    # 任务【失败】时绝不可信：tasker 运行时缓存按节点名保留上一次
+    # 成功执行的详情、跨任务不清空——实测未命中任务返回了之前
+    # __mcp_*_match 任务的命中（别的屏幕的 box/score，如把战斗屏上的
+    # 匹配返回成主界面"战斗"按钮的 0.867576）。v5.8.1 的
+    # GetRecognitionDetail 本身也必然失败（同源）。
     detail = _reco_detail_from_event(s, job.job_id)
     if detail is not None:
         return detail
     if job.succeeded:
+        # 任务成功但事件缺失（sink 竞态/被挤出）——尽力取官方 detail
+        nd = _node_detail_from_job(job, entry) or s.tasker.get_latest_node(entry)
+        if nd is not None and nd.recognition is not None:
+            return nd.recognition
         raise MaaMcpError(f"识别未返回结果: {entry}（read_logs 可查 C++ 侧原因）")
     # MAA 对"入口节点未命中"的标准行为是重试到 timeout 后任务失败——
     # 走到这里说明识别根本没跑（节点无效/任务异常），属真错误
