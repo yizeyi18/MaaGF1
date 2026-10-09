@@ -657,6 +657,158 @@ def _sm_flow():
     return build_flow_81n(rounds=1)
 
 
+# ---------------- SM 代码热注入（开发态，免 CI 循环） ----------------
+#
+# SM 代码（sm/ 包）是纯 Python，coprocess 从 <package>/agent/src 磁盘
+# import。开发调参时不必走 push→CI→下载→覆盖：直接推文件 + 清
+# sys.modules，下一次 check_state/run_sm_8_1n 调用即加载新代码。
+# 注意：
+# - maa_mcp/ 包的工具函数在进程启动时已注册（闭包持有旧函数对象），
+#   注入 maa_mcp 文件需要重启 coprocess（=重启 GUI）才生效；sm/ 包
+#   在每次工具调用时现 import，清缓存即生效。
+# - 注入是开发态覆盖：下一次 Agent zip 部署会覆盖磁盘文件（注入丢失，
+#   属预期）。规范代码始终以 git 仓库为准——注入的同时要同步提交。
+
+def _sm_src_root() -> str:
+    """agent 源码根（maa_mcp/tools.py 的上上级 = agent/src）。"""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _sm_backup_root() -> str:
+    return os.path.join(_sm_src_root(), ".sm_backup")
+
+
+def _sm_normalize_path(path: str) -> str:
+    """校验并归一化注入路径；只允许 sm/ 或 maa_mcp/ 下的 .py。"""
+    if not path or path.startswith(("/", "\\")) or ".." in path.replace("\\", "/").split("/"):
+        raise MaaMcpError(f"非法路径: {path!r}（须为相对路径，禁止 ..）")
+    rel = path.replace("\\", "/").lstrip("/")
+    parts = [p for p in rel.split("/") if p]
+    if len(parts) < 2 or parts[0] not in ("sm", "maa_mcp") or not parts[-1].endswith(".py"):
+        raise MaaMcpError(f"只允许 sm/ 或 maa_mcp/ 下的 .py 文件: {path!r}")
+    target = os.path.join(_sm_src_root(), *parts)
+    root = _sm_src_root()
+    if not os.path.abspath(target).startswith(os.path.abspath(root) + os.sep):
+        raise MaaMcpError(f"路径越界: {path!r}")
+    if not os.path.isfile(target):
+        raise MaaMcpError(f"文件不存在（拒绝新建，防拼错路径污染源码树）: {path!r}")
+    return rel
+
+
+def _sm_purge_modules(rel_path: str) -> List[str]:
+    """清掉受影响顶层包的 sys.modules 缓存，下次 import 重新编译。"""
+    import sys
+
+    top = rel_path.replace("\\", "/").split("/")[0]
+    purged = []
+    for mod in list(sys.modules):
+        if mod == top or mod.startswith(top + "."):
+            sys.modules.pop(mod, None)
+            purged.append(mod)
+    return purged
+
+
+def _sm_backup_meta(rel_path: str) -> Dict[str, Any]:
+    meta_path = os.path.join(_sm_backup_root(), rel_path.replace("\\", "/") + ".meta.json")
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def tool_update_sm_file(hub: "object", path: str, content: str) -> Dict[str, Any]:
+    """热注入 SM/maa_mcp Python 文件（开发态，免 CI）。
+
+    path: 相对 agent/src 的路径（如 sm/states_common.py、sm/core.py）。
+    content: 完整文件内容（UTF-8 文本）。先做语法编译检查再落盘。
+    首次注入自动备份原文件到 .sm_backup/（revert_sm_file 可还原）。
+    sm/ 包注入后下次 check_state/run_sm 立即生效；maa_mcp/ 需重启
+    coprocess（GUI）生效。
+    """
+    rel = _sm_normalize_path(path)
+    target = os.path.join(_sm_src_root(), *rel.split("/"))
+    try:
+        compile(content, target, "exec")
+    except SyntaxError as e:
+        raise MaaMcpError(f"语法错误，未写入 {rel}: 行{e.lineno}: {e.msg}")
+
+    import hashlib
+    import time as _time
+
+    backup_dir = _sm_backup_root()
+    backup_path = os.path.join(backup_dir, *rel.split("/"))
+    meta_path = backup_path + ".meta.json"
+    backup_created = False
+    if not os.path.exists(backup_path):
+        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+        with open(target, "rb") as f:
+            original = f.read()
+        with open(backup_path, "wb") as f:
+            f.write(original)
+        backup_created = True
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "path": rel,
+            "original_sha256": hashlib.sha256(
+                open(backup_path, "rb").read()).hexdigest(),
+            "injected_at": _time.strftime("%Y-%m-%d %H:%M:%S"),
+            "injected_sha256": hashlib.sha256(
+                content.encode("utf-8")).hexdigest(),
+        }, f, ensure_ascii=False, indent=1)
+
+    with open(target, "w", encoding="utf-8", newline="\n") as f:
+        f.write(content)
+    purged = _sm_purge_modules(rel)
+    note = ("sm 包：下次 check_state/run_sm_8_1n 即生效。"
+            if rel.startswith("sm/")
+            else "maa_mcp 包：工具函数启动时已注册，需重启 GUI 生效。")
+    return {
+        "ok": True, "path": rel,
+        "bytes": len(content.encode("utf-8")),
+        "backup_created": backup_created,
+        "modules_purged": len(purged),
+        "note": note,
+    }
+
+
+def tool_revert_sm_file(hub: "object", path: str) -> Dict[str, Any]:
+    """还原热注入的文件到注入前版本（用 .sm_backup 备份），并清模块缓存。"""
+    rel = _sm_normalize_path(path)
+    backup_path = os.path.join(_sm_backup_root(), *rel.split("/"))
+    if not os.path.isfile(backup_path):
+        raise MaaMcpError(f"无备份（从未注入过？）: {rel}")
+    target = os.path.join(_sm_src_root(), *rel.split("/"))
+    with open(backup_path, "rb") as f:
+        original = f.read()
+    with open(target, "wb") as f:
+        f.write(original)
+    os.remove(backup_path)
+    meta_path = backup_path + ".meta.json"
+    if os.path.exists(meta_path):
+        os.remove(meta_path)
+    purged = _sm_purge_modules(rel)
+    return {"ok": True, "path": rel, "restored_bytes": len(original),
+            "modules_purged": len(purged)}
+
+
+def tool_sm_injected_status(hub: "object") -> Dict[str, Any]:
+    """列出当前已注入（有备份）的 SM 文件及元数据。"""
+    backup_root = _sm_backup_root()
+    entries = []
+    if os.path.isdir(backup_root):
+        for dirpath, _dirs, files in os.walk(backup_root):
+            for fn in files:
+                if not fn.endswith(".meta.json"):
+                    continue
+                try:
+                    with open(os.path.join(dirpath, fn), "r", encoding="utf-8") as f:
+                        entries.append(json.load(f))
+                except (OSError, ValueError):
+                    continue
+    return {"src_root": _sm_src_root(), "injected": entries}
+
+
 def tool_reco_debug(hub: "object", session_id: str = "") -> Dict[str, Any]:
     """诊断识别事件兜底链路（v5.8.1 GetRecognitionDetail 失败绕过）。
 

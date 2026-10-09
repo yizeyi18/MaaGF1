@@ -216,6 +216,26 @@ def register_tools(server: "object") -> None:
         """
         return _call("read_logs", source=source, lines=lines, pattern=pattern)
 
+    @server.tool()
+    def update_sm_file(path: str, content: str) -> object:
+        """热注入 SM/maa_mcp Python 文件（开发态，免 push→CI→部署循环）。
+
+        path: 相对 agent/src（如 sm/states_common.py）；content: 完整文件
+        文本。语法检查后落盘，首次注入自动备份（revert_sm_file 可还原）。
+        sm/ 包下次 check_state/run_sm 立即生效；maa_mcp/ 需重启 GUI。
+        """
+        return _call("update_sm_file", path=path, content=content)
+
+    @server.tool()
+    def revert_sm_file(path: str) -> object:
+        """还原热注入的文件到注入前版本（用自动备份）。"""
+        return _call("revert_sm_file", path=path)
+
+    @server.tool()
+    def sm_injected_status() -> object:
+        """列出已注入的 SM 文件（备份清单 + 注入时间 + sha256）。"""
+        return _call("sm_injected_status")
+
 
 _IMPL: Dict[str, Any] = {
     "get_info": T.tool_get_info,
@@ -242,6 +262,9 @@ _IMPL: Dict[str, Any] = {
     "run_sm_8_1n": T.tool_run_sm_8_1n,
     "stop_sm": T.tool_stop_sm,
     "read_logs": T.tool_read_logs,
+    "update_sm_file": T.tool_update_sm_file,
+    "revert_sm_file": T.tool_revert_sm_file,
+    "sm_injected_status": T.tool_sm_injected_status,
 }
 
 
