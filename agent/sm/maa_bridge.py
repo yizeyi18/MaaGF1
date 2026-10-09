@@ -168,7 +168,11 @@ class MaaBridge(SMContext):
         cap = _agent_capture()
         if cap is None:
             return None
-        deadline = time.time() + 2.0
+        # 5s：识别事件经 IPC 转发，guard 连发多次识别后突发延迟可能
+        # 超过 2s（2026-10-09 实机：unless 条件识别事件迟于 2s 窗口 →
+        # 返回 None → 误判"未命中"）。正常 hit/miss 事件 <2s 到，
+        # 只有真延迟的事件需要这 3s 余量。
+        deadline = time.time() + 5.0
         while True:
             box = cap.take_by_reco_id(reco_id)
             if box is not MISS:
@@ -212,7 +216,12 @@ class MaaBridge(SMContext):
         if a.if_node:
             image = self.screenshot()
             detail = self._recognize(a.if_node, image)
-            if detail is None or not detail.hit:
+            if detail is None:
+                # fail-closed：条件识别失败不能猜"未命中"（可能误执行动作）
+                frame = self.save_debug_image(f"if_fail_{a.if_node}", image)
+                raise SMError(f"if 条件识别失败: {a.if_node}（动作 {a.describe()}）"
+                              + (f" frame={frame}" if frame else ""))
+            if not detail.hit:
                 frame = self._reco_frame(f"if_{a.if_node}", image, False)
                 self.log("DEBUG", f"可选动作跳过（{a.if_node} 未命中）: {a.describe()}"
                          + (f" frame={frame}" if frame else ""))
@@ -223,11 +232,22 @@ class MaaBridge(SMContext):
             # 反向条件：unless_node 命中则跳过（用于"弹层已关则先重开"恢复）
             image = self.screenshot()
             detail = self._recognize(a.unless_node, image)
-            if detail is not None and detail.hit:
+            if detail is None:
+                # fail-closed：条件识别失败不能猜"未命中"。
+                # 2026-10-09 实机教训：识别瞬时失败返回 None → 误执行
+                # "重开弹层"点击 → 把已开弹层点关 → 后续锚点全灭。
+                # 抛错让本次尝试失败重试（新截图重新判定）。
+                frame = self.save_debug_image(f"unless_fail_{a.unless_node}", image)
+                raise SMError(f"unless 条件识别失败: {a.unless_node}（动作 {a.describe()}）"
+                              + (f" frame={frame}" if frame else ""))
+            if detail.hit:
                 frame = self._reco_frame(f"unless_{a.unless_node}", image, False)
                 self.log("DEBUG", f"条件动作跳过（{a.unless_node} 命中）: {a.describe()}"
                           + (f" frame={frame}" if frame else ""))
                 return
+            frame = self._reco_frame(f"unless_{a.unless_node}", image, False)
+            self.log("DEBUG", f"条件动作执行（{a.unless_node} 未命中）: {a.describe()}"
+                      + (f" frame={frame}" if frame else ""))
             if a.anchor_node and a.anchor_node == a.unless_node:
                 x, y = self._center(detail, a)
 
