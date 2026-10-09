@@ -29,6 +29,32 @@ from sm.core import (
 from sm.missing import describe_missing, is_missing
 
 
+def _install_stop_probe(ev: "threading.Event", name: str) -> None:
+    """给停止事件包一层探针：谁调了 set() 就记谁（带调用栈）。
+
+    诊断用（2026-10-09 23:08：流在超时前被'用户请求停止'中止，
+    用户确认未手动停）。threading.Event 是纯 Python 类，实例属性
+    可遮蔽类方法；包一次后标记，避免重入。
+    """
+    if getattr(ev, "_stop_probed", False):
+        return
+    try:
+        ev._stop_probed = True
+    except Exception:
+        return
+    orig = ev.set
+
+    def _set(*args, **kwargs):
+        import traceback
+
+        stack = "".join(traceback.format_stack()[:-1])
+        _sm_log("WARNING",
+                f"[stop-probe] {name}.set() 被调用！调用栈：\n{stack}")
+        return orig(*args, **kwargs)
+
+    ev.set = _set
+
+
 def _reco_param_classes() -> Dict[str, type]:
     """识别类型 → 参数 dataclass。动态探测：不同 MaaFramework 版本
     （如 5.2.6 无 JAnd/JOr，新版有）暴露的 dataclass 集合不同，
@@ -113,6 +139,10 @@ class TaskerBridge(SMContext):
         self._missing_warned: set = set()
         self._frame_log = frame_log  # all=每次识别落帧 | key=仅未命中落帧 | off
         self._reco_n = 0
+        # 停止探针（2026-10-09 23:08 实机：run#6 在 30min 超时前被
+        # "用户请求停止"中止，用户确认未手动停 → 记录 set() 调用栈定位）
+        _install_stop_probe(hub.stop_sm, "hub.stop_sm")
+        _install_stop_probe(stop_event, "local stop_event")
 
     @property
     def frame_log(self) -> str:
