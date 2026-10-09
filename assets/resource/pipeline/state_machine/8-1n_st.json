@@ -20,23 +20,27 @@
 		"threshold": 0.5,
 		"next": []
 	},
+	"$t说明": "t1/t2/t3 为全屏搜索（无 ROI）：地图可被拖动（平移），固定 ROI 在平移偏离后必然失效；徽章存在性判定与锚点点击在全屏搜索下平移鲁棒。SM81N_map 背景保留固定 ROI（计划屏需靠它排除地图态；平移由流程入口/轮首的平移归一化步骤制备回参考位）。",
+	"SM81N_map_landmark": {
+		"recognition": "TemplateMatch",
+		"template": "combat/levelUp/8-1N/map_landmark.png",
+		"threshold": 0.7,
+		"next": []
+	},
 	"SM81N_map_t1": {
 		"recognition": "TemplateMatch",
-		"roi": [115, 488, 261, 231],
 		"template": "combat/levelUp/8-1N/map_team1.png",
 		"threshold": 0.5,
 		"next": []
 	},
 	"SM81N_map_t2": {
 		"recognition": "TemplateMatch",
-		"roi": [179, 78, 277, 233],
 		"template": "combat/levelUp/8-1N/map_team2.png",
 		"threshold": 0.5,
 		"next": []
 	},
 	"SM81N_map_t3": {
 		"recognition": "TemplateMatch",
-		"roi": [947, 101, 298, 316],
 		"template": [
 			"combat/levelUp/8-1N/map_team3.png",
 			"combat/levelUp/8-1N/map_teamh.png"

@@ -24,11 +24,19 @@ rounds=None = 无限循环（外部 stop 事件停止）。
 """
 from __future__ import annotations
 
-from .core import Branch, Flow, GotoState, Repeat, WaitUntil, CheckSpec
+from .core import Branch, Flow, GotoState, PanNormalize, Repeat, WaitUntil, CheckSpec
 from .states_81n import states_81n, transitions_81n
 from .states_common import common_states
 
 C = CheckSpec
+
+# 地图平移归一化（"制备状态"方案）：地图可被用户/误操作拖动（平移），
+# 偏离参考位后所有固定 ROI 地图模板与固定坐标动作失效。
+# 地标 = 参考地图 (330,300) 起的 260×220 地形裁剪（纯背景，实测唯一、
+# 跨平移匹配 0.96）；ref = 地标在参考地图中的 top-left。
+# 实测拖动映射：1600ms 慢拖，地图内容位移 ≈ 0.59× 光标位移
+# （400ms 快拖不被识别）。gain=1.0 → 每轮消除 ~59% 残差。
+PAN_NORM = PanNormalize(landmark_node="SM81N_map_landmark", ref=(330, 300))
 
 # 编队轮换链：2队框 → 编成 → 选人 → 收藏筛选生效 → swap → 编成 → 地图
 # （收藏筛选是持久设置：已生效时 charselect_shown 的 goto 直接短路跳过，
@@ -45,6 +53,10 @@ _FORMATION_CHAIN = [
 
 def build_flow_81n(rounds: int = 1) -> Flow:
     steps = [
+        # ---------- 入口归一化（幂等）：地图可能被拖动，先制备回参考位 ----------
+        # 非地图屏（关卡列表/详情）时地标未识别 → 告警跳过，无副作用。
+        PAN_NORM,
+
         # ---------- 入口适配（幂等：已在某步则原地继续） ----------
         Branch(when=[C("SM81N_stage_list")],
                then_steps=[GotoState("stage_detail"), GotoState("map")]),
@@ -71,6 +83,10 @@ def build_flow_81n(rounds: int = 1) -> Flow:
 
         # ---------- 循环体 ----------
         Repeat(rounds, [
+            # 归一化（幂等）：上一轮"重新作战"回到地图后，先制备地图回
+            # 参考平移位再碰任何固定坐标（地图可能在轮间被拖动）。
+            PAN_NORM,
+
             # 稳定态弹药检查：2队地图徽章（Gnewfullammo 先查"有"；
             # Gnewnoammo 有已知误报，不用它做分支条件）
             Branch(when=[C("SM81N_ammo_full")],

@@ -19,7 +19,7 @@ from __future__ import annotations
 import abc
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 
 # ======================================================================================
@@ -200,6 +200,34 @@ class Repeat(FlowStep):
     """重复执行子流。rounds=None 表示无限循环（直到外部停止）。"""
     rounds: Optional[int]
     steps: List[FlowStep]
+
+
+@dataclass
+class PanNormalize(FlowStep):
+    """地图平移归一化（"制备状态"）：把可拖动的地图拖回参考平移位，
+    让预制 ROI / 固定坐标的检查与动作重新生效。
+
+    背景：战棋地图可被用户或误操作拖动（平移）。平移一旦偏离参考位，
+    所有基于固定 ROI 的地图模板（背景/队徽章/港口）与固定坐标点击
+    （重置点位/计划炸狗点/港口）全部失效。本步骤在"碰地图"之前执行：
+      1. 识别背景地标（模板，全屏搜索）→ 相对参考位的偏移 o；
+      2. |o| <= deadzone 即完成（幂等：已在参考位时一次识别即返回）；
+      3. 否则从地标中心（必为空地、不碰单位）向 -o 方向慢速拖动，
+         实测地图内容位移 ≈ 0.59 × 光标位移，gain=1.0 时每次消除约
+         59% 残差，几何收敛（2-5 次进入 deadzone）；
+      4. 地标未识别（非地图屏 / 缩放异常 / 被遮挡）→ 告警并跳过
+         （best-effort：不抛错，让后续检查/锚点明确失败）。
+
+    与"识别地图、点击适配拖动"（方案 B）的区别：本步骤不改变任何
+    预制坐标，而是把地图状态制备回参考位——坐标全部保持有效。
+    """
+    landmark_node: str
+    ref: Tuple[int, int]  # 参考地图中地标的 top-left
+    gain: float = 1.0     # 光标位移 = -gain * offset（每轮消除 ~59% 残差）
+    deadzone: int = 15    # |offset| 均小于此值视为已在参考位（px）
+    max_iter: int = 5
+    drag_ms: int = 1600   # 慢速拖动（实测 400ms 不被识别为拖动，1600ms 稳定）
+    settle_ms: int = 1200  # 每次拖动后等待画面稳定
 
 
 @dataclass
@@ -476,6 +504,45 @@ class Runner:
             self._log("DEBUG", f"等待中: [{checks_label}] 第{n_polls}轮 每{int(poll*1000)}ms {first_frame}")
             time.sleep(poll)
 
+    def run_pan_normalize(self, step: PanNormalize) -> None:
+        """执行地图平移归一化（见 PanNormalize 文档）。"""
+        from .boxutil import box_xywh
+
+        spec = CheckSpec(step.landmark_node)
+        refx, refy = step.ref
+        for it in range(1, step.max_iter + 1):
+            self._abort_if_stopped()
+            image = self.ctx.screenshot()
+            frame = self._frame(f"pan_norm_p{it}", image)
+            r = self.ctx.check(spec, image)
+            if r.detail is None or not r.hit or r.detail.box is None:
+                self._log("WARNING",
+                          f"平移归一化: 地标 {step.landmark_node} 未识别"
+                          f"（非地图屏/缩放异常/被遮挡），跳过"
+                          + (f" {frame}" if frame else ""))
+                return
+            x, y, w, h = box_xywh(r.detail.box)
+            ox, oy = x - refx, y - refy
+            if abs(ox) <= step.deadzone and abs(oy) <= step.deadzone:
+                self._log("INFO",
+                          f"平移归一化: 已在参考位 (offset=({ox},{oy}))"
+                          + (f" {frame}" if frame else ""))
+                return
+            sx, sy = x + w // 2, y + h // 2
+            ex = sx - step.gain * ox
+            ey = sy - step.gain * oy
+            self._log("INFO",
+                      f"平移归一化 #{it}: offset=({ox},{oy}) "
+                      f"拖动 ({sx},{sy})->({ex:.0f},{ey:.0f}) {step.drag_ms}ms"
+                      + (f" {frame}" if frame else ""))
+            self.ctx.do_action(ActionSpec(kind="swipe", x=sx, y=sy,
+                                          x2=int(ex), y2=int(ey),
+                                          duration=step.drag_ms))
+            time.sleep(step.settle_ms / 1000.0)
+        self._log("WARNING",
+                  f"平移归一化: {step.max_iter} 次迭代后未完全收敛"
+                  f"（继续执行，由后续状态检查把关）")
+
     # ---------------- 流执行 ----------------
 
     def run(self) -> None:
@@ -512,6 +579,8 @@ class Runner:
                     self._log("INFO", f"重复第 {i} 轮 (共 {step.rounds if step.rounds else '无限'})")
                     self._run_steps(step.steps)
                     self.round_finished = max(self.round_finished, i)
+            elif isinstance(step, PanNormalize):
+                self.run_pan_normalize(step)
             else:
                 raise SMError(f"未知流步骤类型: {type(step)}")
 
