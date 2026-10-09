@@ -385,29 +385,58 @@ def transitions_81n() -> list[Transition]:
                 _click(234, 339),  # 2队打手槽位卡（原 target [193,278,82,123] 中心）
                 ActionSpec(kind="wait", ms=500),
             ],
-            # 选人屏（筛选开/关都满足：标签 + 收藏/显示 按钮）
-            post_check=[C("SM81N_charselect"), C("SM81N_fav_filter")],
+            # 到达选人屏·基础屏（弹层必须关闭：弹层"确认"只在弹层内可见）
+            post_check=[C("SM81N_charselect"),
+                        C("SM81N_fav_confirm", inverted=True)],
             max_retries=3,
         ),
         Transition(
-            name="T_charselect__charselect_shown",
-            # 应用收藏筛选（原 81N 链：显示全部→收藏→确认）：
-            # 点"显示种类"按钮 → 点"收藏" → 点"确认"。
-            # 幂等性在状态层保证：筛选已开（持久设置）时 locate 直接
-            # 命中 charselect_shown，goto 短路不重复点（防 toggle 关回去）。
-            # 选人屏点击最易被吞：retries=5。
-            from_state="charselect", to_state="charselect_shown",
+            name="T_charselect__charselect_filter",
+            # 打开筛选弹层：点"显示种类"标签（基础屏右上，两种筛选态都可见）。
+            from_state="charselect", to_state="charselect_filter",
             actions=[
                 _anchor("SM81N_charselect"),
+                ActionSpec(kind="wait", ms=400),
+            ],
+            # 弹层打开 ⇔ "仅显示收藏角色" + 弹层"确认" 同屏可见
+            post_check=[C("SM81N_fav_filter"), C("SM81N_fav_confirm")],
+            max_retries=5, retry_wait_ms=1000,
+        ),
+        Transition(
+            name="T_charselect_filter__charselect_shown",
+            # 弹层内应用收藏筛选：勾"仅显示收藏角色" → 点弹层"确认"
+            # → 回基础屏且标签变"选择中"。
+            # 首动作 unless_node 兜底：若弹层已关（上轮确认被吞/重试错位），
+            # 先重开（重开的弹层复选框反映当前筛选态 → 后续勾选必然
+            # 收敛；post_check 校验最终态，失败重试继续收敛）。
+            # 复选框是 toggle：若已勾选（上次点中、确认被吞）会先取消，
+            # 本轮 post_check 失败 → 重试时弹层已关 → 重开 → 重新勾选。
+            from_state="charselect_filter", to_state="charselect_shown",
+            actions=[
+                _anchor("SM81N_charselect", unless_node="SM81N_fav_confirm"),
                 ActionSpec(kind="wait", ms=300),
                 _anchor("SM81N_fav_filter"),
                 ActionSpec(kind="wait", ms=300),
                 _anchor("SM81N_fav_confirm"),
                 ActionSpec(kind="wait", ms=500),
             ],
-            # 筛选生效 ⇔ "显示种类"标签变"选择中"（filter_all 不命中）
+            # 回基础屏 + 筛选生效（标签=选择中）+ 弹层已关
             post_check=[C("SM81N_charselect"),
-                        C("SM81N_filter_all", inverted=True)],
+                        C("SM81N_filter_all", inverted=True),
+                        C("SM81N_fav_confirm", inverted=True)],
+            max_retries=5, retry_wait_ms=1000,
+        ),
+        Transition(
+            name="T_charselect_filter__charselect",
+            # 弹层内"确认"（不改勾选）→ 回基础屏，筛选态保持原样
+            # （恢复/退出弹层用；两状态间的检查边）。
+            from_state="charselect_filter", to_state="charselect",
+            actions=[
+                _anchor("SM81N_fav_confirm"),
+                ActionSpec(kind="wait", ms=500),
+            ],
+            post_check=[C("SM81N_charselect"),
+                        C("SM81N_fav_confirm", inverted=True)],
             max_retries=5, retry_wait_ms=1000,
         ),
         Transition(

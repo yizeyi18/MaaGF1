@@ -219,6 +219,17 @@ class MaaBridge(SMContext):
                 return
             if a.anchor_node and a.anchor_node == a.if_node:
                 x, y = self._center(detail, a)
+        elif a.unless_node:
+            # 反向条件：unless_node 命中则跳过（用于"弹层已关则先重开"恢复）
+            image = self.screenshot()
+            detail = self._recognize(a.unless_node, image)
+            if detail is not None and detail.hit:
+                frame = self._reco_frame(f"unless_{a.unless_node}", image, False)
+                self.log("DEBUG", f"条件动作跳过（{a.unless_node} 命中）: {a.describe()}"
+                          + (f" frame={frame}" if frame else ""))
+                return
+            if a.anchor_node and a.anchor_node == a.unless_node:
+                x, y = self._center(detail, a)
 
         if a.anchor_node:
             if image is None:

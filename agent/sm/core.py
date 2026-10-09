@@ -102,6 +102,8 @@ class ActionSpec:
     - 坐标：x,y（起点/中心）；swipe 用 x2,y2 作终点；duration 为毫秒
     - 锚点：anchor_node 非空时，先对该节点识别，命中框中心 (+dx,+dy) 作为点击/长按位置
     - 可选：if_node 非空时，仅当该识别命中才执行本动作（用于弹窗等可选分支）
+    - 可选：unless_node 非空时，仅当该识别未命中才执行本动作（if_node 的反向，
+      用于"弹层已关则先重开"这类恢复路径；与 if_node 同用以后者优先）
     """
     kind: str
     x: int = 0
@@ -114,6 +116,7 @@ class ActionSpec:
     dx: int = 0
     dy: int = 0
     if_node: str = ""
+    unless_node: str = ""
 
     def describe(self) -> str:
         parts = [self.kind]
@@ -130,6 +133,8 @@ class ActionSpec:
             parts.append(f"({self.x},{self.y})")
         if self.if_node:
             parts.append(f"if={self.if_node}")
+        if self.unless_node:
+            parts.append(f"unless={self.unless_node}")
         return " ".join(parts)
 
 

@@ -54,6 +54,18 @@ S_FORMATION = State(
     locate_priority=22,
 )
 
+#: 编成-角色选择·筛选弹层（点"显示种类"后打开的大弹层）——特征 =
+#: "仅显示收藏角色"复选框文案 + 弹层"确认"按钮（两者只在弹层打开时可见；
+#: 弹层打开时基础屏的"显示种类"标签仍在右上可见，故本状态优先级必须
+#: 高于 charselect/charselect_shown）。
+#: 2026-10-09 实机截图测量：复选框 (905,137)，确认 (940,670)。
+S_CHARSELECT_FILTER = State(
+    name="charselect_filter",
+    checks=[CheckSpec("SM81N_fav_filter"), CheckSpec("SM81N_fav_confirm")],
+    desc="编成-角色选择·筛选弹层（显示种类已展开）",
+    locate_priority=18,
+)
+
 #: 编成-角色选择（收藏筛选生效中）——"显示种类"按钮标签="选择中"
 #: （filter_all 不命中 ⇔ 筛选开）。筛选是持久设置，跨轮保持：
 #: 第二轮进选人屏直接就是本状态，goto 短路跳过 toggle（幂等）。
@@ -65,14 +77,17 @@ S_CHARSELECT_SHOWN = State(
     locate_priority=20,
 )
 
-#: 编成-角色选择（筛选关闭，"显示种类"标签="显示全部"，"收藏"按钮可见）
+#: 编成-角色选择·基础屏（弹层关闭，筛选开/关两态都算）——"显示种类"
+#: 标签（显示全部/选择中 均可读）。goto 目标用它保证两种筛选态都能
+#: 短路；筛选态的区分交给 charselect_shown（优先级更高，locate 先判）。
 S_CHARSELECT = State(
     name="charselect",
-    checks=[CheckSpec("SM81N_charselect"), CheckSpec("SM81N_fav_filter")],
-    desc="编成-角色选择（筛选关闭，收藏按钮可见）",
+    checks=[CheckSpec("SM81N_charselect")],
+    desc="编成-角色选择·基础屏（弹层关闭）",
     locate_priority=21,
 )
 
 
 def common_states() -> list[State]:
-    return [S_MAIN, S_STAGE_LIST, S_STAGE_DETAIL, S_FORMATION, S_CHARSELECT, S_CHARSELECT_SHOWN]
+    return [S_MAIN, S_STAGE_LIST, S_STAGE_DETAIL, S_FORMATION,
+            S_CHARSELECT_FILTER, S_CHARSELECT, S_CHARSELECT_SHOWN]

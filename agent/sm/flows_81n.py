@@ -38,14 +38,18 @@ C = CheckSpec
 # （400ms 快拖不被识别）。gain=1.0 → 每轮消除 ~59% 残差。
 PAN_NORM = PanNormalize(landmark_node="SM81N_map_landmark", ref=(330, 300))
 
-# 编队轮换链：2队框 → 编成 → 选人 → 收藏筛选生效 → swap → 编成 → 地图
-# （收藏筛选是持久设置：已生效时 charselect_shown 的 goto 直接短路跳过，
-#  不会重复点"收藏"把筛选 toggle 关回去）
+# 编队轮换链：2队框 → 编成 → 选人基础屏 →（筛选关则：弹层→勾收藏→确认）
+# → swap → 编成 → 地图。
+# 选人屏两状态（基础屏 / 筛选弹层）间转移各带检查（弹层"确认"+复选框
+# 文案为弹层独有特征）；收藏筛选是持久设置，已生效时 Branch 条件
+# filter_all 不命中 → 跳过弹层步，不会重复点"收藏"把筛选 toggle 关回去。
 _FORMATION_CHAIN = [
     GotoState("squad2_box"),
     GotoState("formation"),
     GotoState("charselect"),
-    GotoState("charselect_shown"),
+    Branch(when=[C("SM81N_filter_all")],
+           then_steps=[GotoState("charselect_filter"),
+                       GotoState("charselect_shown")]),
     GotoState("formation"),
     GotoState("map_full"),
 ]
