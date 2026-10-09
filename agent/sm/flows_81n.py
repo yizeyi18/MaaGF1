@@ -1,104 +1,110 @@
-"""8-1N 循环 流定义（状态机 v1 唯一落地的任务流，用于测试）。
+"""8-1N 循环流（v2）：入口适配 + 入口直查 1队 + N 轮（稳定态代理检查 + 战斗 + 重置）。
 
-流程（映射自 !81N总流程 及其各阶段 pipeline）：
+轮内步骤（全部映射自实机 walkthrough 测量）：
+  1. 稳定态弹药检查（2队地图徽章 Gnewfullammo，先查"有"）：
+     满 ⇐ 上轮补给过 → 编队轮换（换"编队中1"打手进 2队槽）；
+     空 → 跳过（稳定态不应发生，容错直走）。
+  2. 开始作战（含装备溢出弹窗的可选处理/恢复）。
+  3. 补给准备：点 2队 标记开框（未选中时首下仅选中，重试开框）
+     → 补给 → 再点 2队 开框 → 撤离 → 确定（2队满弹离场）。
+  4. 计划模式：1队槽 → 炸狗点1 → 炸狗点2（AP 7→1）→ 执行计划。
+  5. 等待战斗结束：loading(794) → 结算 → 战后（1队自动选中、
+     妖精面板出现；轮询最多 10 分钟，过场屏点击无效故不主动点）。
+  6. 重置：点战后 1队 开框（自动选中，一点即开）→ 撤离 → 确定
+     → 左上角菜单 → 重新作战 → 地图全部署（~16s 过渡）。
 
-    入口适配:  关卡列表 → 关卡详情 → 地图   （已在地图/已部分部署则自动跳过，幂等）
-    部署:      缺哪队补哪队（1队/2队/3队，模板锚点点击 + 确定 + 地图标记检查）
-    主循环 × N 轮:
-      弹药检查:  2队弹药满 → 编成 2队打手（收藏筛选）→ 返回地图；  无弹药 → 跳过
-      开始作战:  （可选：装备溢出弹窗处理）
-      补给:      点2队 → 补给 → 再点2队 → 撤离（单zas 炸狗战术准备）
-      计划:      计划模式 → 选1队+炸狗点1（行动点数 3→2）→ 炸狗点2（→1）→ 执行
-      战斗:      等待战斗结束（妖精面板消失）
-      重置:      撤1队 → 左上菜单 → 重新作战 → 回到"三队齐备"地图
+入口（循环前一次性，幂等）：
+  关卡列表 → 关卡详情 → 地图 → 补部署 1/2/3队 →
+  **入口弹药检查：直接开 1队框读"弹药 X/Y"行**（squad1_zero，
+  不用 2队代理推断——代理仅在稳定态有效）：
+    无 0（打手有弹）→ 关框，不编队；
+    有 0（打手耗空）→ 关框 → 编队轮换 → 地图。
 
-开始界面要求（与原任务一致）：关卡列表页 / 8-1N 关卡详情页 / 8-1N 地图页。
+rounds=None = 无限循环（外部 stop 事件停止）。
 """
 from __future__ import annotations
 
-from .core import (
-    Branch,
-    CheckSpec,
-    Flow,
-    GotoState,
-    Repeat,
-    WaitUntil,
-)
+from .core import Branch, Flow, GotoState, Repeat, WaitUntil, CheckSpec
 from .states_81n import states_81n, transitions_81n
 from .states_common import common_states
 
 C = CheckSpec
 
+# 编队轮换链：2队框 → 编成 → 选人 → 收藏筛选生效 → swap → 编成 → 地图
+# （收藏筛选是持久设置：已生效时 charselect_shown 的 goto 直接短路跳过，
+#  不会重复点"收藏"把筛选 toggle 关回去）
+_FORMATION_CHAIN = [
+    GotoState("squad2_box"),
+    GotoState("formation"),
+    GotoState("charselect"),
+    GotoState("charselect_shown"),
+    GotoState("formation"),
+    GotoState("map_full"),
+]
 
-def build_flow_81n(rounds: int | None = 1) -> Flow:
-    """rounds: 循环轮数；None = 无限循环（对应原"是否开启无限循环"选项）。"""
+
+def build_flow_81n(rounds: int = 1) -> Flow:
     steps = [
-        # ---------- 入口适配（幂等） ----------
+        # ---------- 入口适配（幂等：已在某步则原地继续） ----------
+        Branch(when=[C("SM81N_stage_list")],
+               then_steps=[GotoState("stage_detail"), GotoState("map")]),
+        Branch(when=[C("SM81N_stage_detail")],
+               then_steps=[GotoState("map")]),
+        Branch(when=[C("SM81N_map"), C("SM81N_map_t1", inverted=True)],
+               then_steps=[GotoState("map_t1")]),
+        Branch(when=[C("SM81N_map"), C("SM81N_map_t2", inverted=True)],
+               then_steps=[GotoState("map_t12")]),
+        Branch(when=[C("SM81N_map"), C("SM81N_map_t3", inverted=True)],
+               then_steps=[GotoState("map_full")]),
+
+        # 部署动画/过场可能让 locate 闪烁：先固化到 map_full 再开 1队框
+        GotoState("map_full"),
+
+        # ---------- 入口弹药检查：直接查 1队（打手弹药），不用 2队 代理 ----------
+        GotoState("squad1_box"),
         Branch(
-            when=[C("SM81N_stage_list")],
-            then_steps=[GotoState("stage_detail"), GotoState("map")],
+            when=[C("SM81N_squad1_zero", inverted=True)],
+            then_steps=[GotoState("map_full")],  # 打手有弹：关框，不编队
+            else_steps=[GotoState("map_full"),  # 打手耗空：关框 → 编队轮换
+                        *_FORMATION_CHAIN],
         ),
-        Branch(
-            when=[C("SM81N_stage_detail")],
-            then_steps=[GotoState("map")],
-        ),
-        # ---------- 部署缺失梯队（幂等：缺哪队补哪队） ----------
-        Branch(
-            when=[C("SM81N_map"), C("SM81N_map_t1", inverted=True)],
-            then_steps=[GotoState("map_t1")],
-        ),
-        Branch(
-            when=[C("SM81N_map"), C("SM81N_map_t2", inverted=True)],
-            then_steps=[GotoState("map_t12")],
-        ),
-        Branch(
-            when=[C("SM81N_map"), C("SM81N_map_t3", inverted=True)],
-            then_steps=[GotoState("map_full")],
-        ),
-        # ---------- 主循环 ----------
-        Repeat(
-            rounds,
-            [
-                # 弹药充足 → 编成 2队打手
-                Branch(
-                    when=[C("SM81N_ammo_full")],
-                    then_steps=[
-                        GotoState("formation"),
-                        GotoState("charselect"),
-                        GotoState("charselect_shown"),
-                        GotoState("formation"),
-                        GotoState("map_full"),
-                    ],
-                ),
-                # 开始作战（装备溢出弹窗出现才处理）
-                GotoState("battle"),
-                # 2队 单zas 补给 → 撤离
-                GotoState("battle_popup_supply"),
-                GotoState("battle"),
-                GotoState("battle_popup_withdraw"),
-                GotoState("battle"),
-                # 计划：选1队+炸狗点1（行动点数3→2）→ 炸狗点2（→1）→ 执行
-                GotoState("plan"),
-                GotoState("plan_p1"),
-                GotoState("plan_2pts"),
-                GotoState("battle"),
-                # 等待战斗结束（最多 10 分钟，每 3 秒轮询）
-                WaitUntil(
-                    checks=[C("SM81N_battle", inverted=True), C("SM81N_map")],
-                    timeout_ms=600000,
-                    poll_ms=3000,
-                ),
-                # 重置：撤 1队 → 重新作战
-                GotoState("t1_wd_popup"),
-                GotoState("withdraw_ok"),
-                GotoState("endmenu"),
-                GotoState("map_full"),
-            ],
-        ),
+
+        # ---------- 循环体 ----------
+        Repeat(rounds, [
+            # 稳定态弹药检查：2队地图徽章（Gnewfullammo 先查"有"；
+            # Gnewnoammo 有已知误报，不用它做分支条件）
+            Branch(when=[C("SM81N_ammo_full")],
+                   then_steps=list(_FORMATION_CHAIN)),
+
+            # 开始作战（装备溢出弹窗在 T_map_full__battle 内自愈）
+            GotoState("battle"),
+
+            # 补给准备：2队框 → 补给 → 再开框 → 撤离 → 确定（2队离场）
+            GotoState("t2_box"),
+            GotoState("battle"),
+            GotoState("t2_box"),
+            GotoState("withdraw_ok"),
+            GotoState("battle_no2"),
+
+            # 计划：1队槽 → 炸狗点1 → 炸狗点2（AP 7→1）→ 执行
+            GotoState("plan"),
+            GotoState("plan_done"),
+            GotoState("battle_no2"),
+
+            # 等战斗结束（loading → 结算 → 战后：妖精面板=1队已选中）
+            WaitUntil(checks=[C("SM81N_battle")],
+                      timeout_ms=600000, poll_ms=3000),
+
+            # 重置：撤 1队 → 重新作战 → 地图
+            GotoState("t1_wd_popup"),
+            GotoState("withdraw_ok"),
+            GotoState("endmenu"),
+            GotoState("map_full"),
+        ]),
     ]
 
     return Flow(
-        name="8-1N循环(状态机)",
+        name="8-1N循环(状态机v2)",
         entry_state="map_full",
         states=common_states() + states_81n(),
         transitions=transitions_81n(),

@@ -102,7 +102,7 @@ def _sm_log(level: str, msg: str) -> None:
 
 class TaskerBridge(SMContext):
     def __init__(self, hub: "object", session: "object", stop_event: threading.Event,
-                 debug_dir: str = "debug_sm"):
+                 debug_dir: str = "debug_sm", frame_log: str = "key"):
         self._hub = hub
         self._session = session
         self._ctrl = hub.controller
@@ -111,6 +111,23 @@ class TaskerBridge(SMContext):
         self._stop = stop_event
         self._debug_dir = debug_dir
         self._missing_warned: set = set()
+        self._frame_log = frame_log  # all=每次识别落帧 | key=仅未命中落帧 | off
+        self._reco_n = 0
+
+    @property
+    def frame_log(self) -> str:
+        return self._frame_log
+
+    def _reco_frame(self, node: str, image: "object", hit: bool) -> str:
+        """按 frame_log 模式落识别帧（all=总是，key=仅未命中），返回路径。"""
+        if self._frame_log == "off" or (self._frame_log == "key" and hit):
+            return ""
+        self._reco_n += 1
+        tag = f"reco_{self._reco_n:05d}_{node}_{'hit' if hit else 'miss'}"
+        try:
+            return self.save_debug_image(tag, image) or ""
+        except Exception:
+            return ""
 
     # ---------------- SMContext ----------------
 
@@ -131,13 +148,16 @@ class TaskerBridge(SMContext):
         if image is None:
             image = self.screenshot()
         detail = self._recognize(spec.node, image)
+        hit = bool(detail.hit) if detail is not None else False
+        frame = self._reco_frame(spec.node, image, hit)
+        if frame:
+            _sm_log("DEBUG", f"reco {spec.node} -> {'hit' if hit else 'miss'} frame={frame}")
         if detail is None:
             # 识别失败/无详情 → 按"未命中"处理（与 CheckResult.hit 一致）：
             # 普通检查（须命中）不通过，inverted 检查（须不命中）通过。
             # 此前误写 ok=(not inverted)——把识别失败当命中，基地屏上
             # 所有普通检查全"通过"，locate 必误报优先级最高的状态。
             return CheckResult(ok=spec.inverted, spec=spec, detail=None)
-        hit = bool(detail.hit)
         return CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
 
     def do_action(self, action: ActionSpec) -> None:
@@ -245,7 +265,9 @@ class TaskerBridge(SMContext):
             image = self.screenshot()
             detail = self._recognize(a.if_node, image)
             if detail is None or not detail.hit:
-                self.log("DEBUG", f"可选动作跳过（{a.if_node} 未命中）: {a.describe()}")
+                frame = self._reco_frame(f"if_{a.if_node}", image, False)
+                self.log("DEBUG", f"可选动作跳过（{a.if_node} 未命中）: {a.describe()}"
+                         + (f" frame={frame}" if frame else ""))
                 return
             if a.anchor_node and a.anchor_node == a.if_node:
                 x, y = self._center(detail, a)
@@ -255,11 +277,18 @@ class TaskerBridge(SMContext):
                 image = self.screenshot()
             detail = self._recognize(a.anchor_node, image)
             if detail is None or not detail.hit or detail.box is None:
-                self.save_debug_image(f"anchor_miss_{a.anchor_node}", image)
+                frame = self.save_debug_image(f"anchor_miss_{a.anchor_node}", image)
+                self.log("WARNING", f"锚点 {a.anchor_node} -> miss（动作 {a.describe()}）"
+                         + (f" frame={frame}" if frame else ""))
                 raise ActionAnchorMissError(
                     f"锚点识别未命中: {a.anchor_node}（动作 {a.describe()}）"
                 )
             x, y = self._center(detail, a)
+            from sm.boxutil import box_xywh
+
+            bx, by, bw, bh = box_xywh(detail.box)
+            self.log("INFO", f"锚点 {a.anchor_node} -> hit box=({bx},{by},{bw},{bh})"
+                         f" -> {a.kind} ({x},{y})")
 
         if a.kind == "click":
             self._ctrl.post_click(x, y).wait()
@@ -274,4 +303,7 @@ class TaskerBridge(SMContext):
             raise SMError("zoom 动作仅 ADB 控制器支持（当前为 Win32）")
         else:
             raise SMError(f"未知动作类型: {a.kind}")
+        if not a.anchor_node:
+            extra = f" -> ({a.x2},{a.y2})" if a.kind == "swipe" else ""
+            self.log("INFO", f"动作 {a.kind} ({x},{y}){extra}")
         self.log("DEBUG", f"动作完成: {a.describe()}")

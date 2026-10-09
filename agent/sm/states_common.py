@@ -54,19 +54,22 @@ S_FORMATION = State(
     locate_priority=22,
 )
 
-#: 编成-角色选择（已展开全部，可见 显示/收藏 筛选）—— 更具体，必须先于 charselect 尝试
+#: 编成-角色选择（收藏筛选生效中）——"显示种类"按钮标签="选择中"
+#: （filter_all 不命中 ⇔ 筛选开）。筛选是持久设置，跨轮保持：
+#: 第二轮进选人屏直接就是本状态，goto 短路跳过 toggle（幂等）。
 S_CHARSELECT_SHOWN = State(
     name="charselect_shown",
-    checks=[CheckSpec("SM81N_charselect"), CheckSpec("SM81N_fav_filter")],
-    desc="编成-角色选择（显示/收藏 可见）",
+    checks=[CheckSpec("SM81N_charselect"),
+            CheckSpec("SM81N_filter_all", inverted=True)],
+    desc="编成-角色选择（收藏筛选生效中，标签=选择中）",
     locate_priority=20,
 )
 
-#: 编成-角色选择
+#: 编成-角色选择（筛选关闭，"显示种类"标签="显示全部"，"收藏"按钮可见）
 S_CHARSELECT = State(
     name="charselect",
-    checks=[CheckSpec("SM81N_charselect")],
-    desc="编成-角色选择（显示全部）",
+    checks=[CheckSpec("SM81N_charselect"), CheckSpec("SM81N_fav_filter")],
+    desc="编成-角色选择（筛选关闭，收藏按钮可见）",
     locate_priority=21,
 )
 

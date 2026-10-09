@@ -855,11 +855,15 @@ def tool_check_state(hub: "object", session_id: str, state_name: str = "") -> Di
 
 
 def tool_run_sm_8_1n(hub: "object", session_id: str, rounds: "object" = 1,
-                     timeout_ms: int = 3600000) -> Dict[str, Any]:
+                     timeout_ms: int = 3600000,
+                     frame_log: str = "key") -> Dict[str, Any]:
     """运行 8-1N 循环状态机流（v1 唯一内置 SM 流）。
 
     rounds: 轮数（正整数）；-1/"inf"/"infinite" = 无限循环（用 stop_sm 停止）。
     timeout_ms: MCP 调用层超时；到点自动请求停止并返回当前进度。
+    frame_log: 识别帧落盘模式 key=仅关键帧(转移前后/分支/等待/未命中) |
+               all=每次识别都落帧 | off=关闭。帧写入 debug_sm/（exe 目录），
+               运行日志（maa_mcp.log）中每条 check/锚点/点击均引用帧路径。
     """
     from sm.core import FlowAbortedError, Runner, SMError
 
@@ -873,9 +877,11 @@ def tool_run_sm_8_1n(hub: "object", session_id: str, rounds: "object" = 1,
         rounds_arg = max(1, int(r))
     from sm.flows_81n import build_flow_81n
 
+    if frame_log not in ("all", "key", "off"):
+        frame_log = "key"
     flow = build_flow_81n(rounds=rounds_arg)
     stop = threading.Event()
-    bridge = TaskerBridge(hub, s, stop)
+    bridge = TaskerBridge(hub, s, stop, frame_log=frame_log)
     hub.stop_sm.clear()
     holder: Dict[str, Any] = {"runner": None, "error": None}
 

@@ -248,6 +248,22 @@ class SMContext(abc.ABC):
     def save_debug_image(self, tag: str, image: object) -> str:
         """保存调试截图（失败现场），返回路径。"""
 
+    def save_frame(self, tag: str, image: object) -> str:
+        """保存"步骤帧"（tag 已含 Runner 的步骤序号），返回路径。
+
+        默认复用 save_debug_image；桥接层可覆盖为独立的帧目录/编号策略。
+        用途：把每步识别/点击所用的截图落盘，运行日志中引用其路径。
+        """
+        try:
+            return self.save_debug_image(tag, image) or ""
+        except Exception:
+            return ""
+
+    @property
+    def frame_log(self) -> str:
+        """步骤帧日志模式："all"=每次识别都落帧 | "key"=仅关键帧 | "off"=关闭。"""
+        return "key"
+
     @property
     @abc.abstractmethod
     def stop_requested(self) -> bool:
@@ -265,6 +281,7 @@ class Runner:
         self._states_by_name = {s.name: s for s in flow.states}
         self._transitions = {(t.from_state, t.to_state): t for t in flow.transitions}
         self.round_finished = 0
+        self._seq = 0  # 步骤帧序号（日志与帧文件一一对应）
 
     # ---------------- 基础 ----------------
 
@@ -275,8 +292,47 @@ class Runner:
     def _log(self, level: str, msg: str) -> None:
         self.ctx.log(level, f"[{self.flow.name}] {msg}")
 
-    def _check_specs(self, specs: Sequence[CheckSpec], image: object) -> List[CheckResult]:
-        return [self.ctx.check(spec, image) for spec in specs]
+    def _frame_on(self) -> bool:
+        try:
+            return self.ctx.frame_log != "off"
+        except Exception:
+            return True
+
+    def _frame(self, tag: str, image: object) -> str:
+        """落盘一张步骤帧（带全局序号），返回路径；off 模式或失败返回空串。"""
+        if not self._frame_on():
+            return ""
+        try:
+            self._seq += 1
+            return self.ctx.save_frame(f"{self._seq:04d}_{tag}", image) or ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _fmt_box(box) -> str:
+        if box is None:
+            return ""
+        try:
+            from .boxutil import box_xywh
+
+            x, y, w, h = box_xywh(box)
+            return f"box=({x},{y},{w},{h})"
+        except Exception:
+            return f"box={box}"
+
+    def _check_specs(self, specs: Sequence[CheckSpec], image: object,
+                     label: str = "") -> List[CheckResult]:
+        """执行一组检查，逐条 DEBUG 日志（节点/命中/框），供日志复盘。"""
+        out: List[CheckResult] = []
+        for spec in specs:
+            r = self.ctx.check(spec, image)
+            out.append(r)
+            inv = "!" if spec.inverted else ""
+            hit = "hit " if r.hit else "miss"
+            box_s = self._fmt_box(r.detail.box) if r.hit else ""
+            tag = f" {label}" if label else ""
+            self._log("DEBUG", f"check {inv}{spec.node} -> {hit} {box_s} ok={r.ok}{tag}".rstrip())
+        return out
 
     @staticmethod
     def _specs_pass(results: Sequence[CheckResult]) -> bool:
@@ -301,11 +357,14 @@ class Runner:
         for attempt in range(1, t.max_retries + 1):
             self._abort_if_stopped()
             image = self.ctx.screenshot()
+            pre_frame = self._frame(f"{t.name}_pre", image)
+            self._log("INFO", f"转移 {t.name} 第{attempt}/{t.max_retries}次"
+                              f"{' pre_frame=' + pre_frame if pre_frame else ''}")
 
-            if t.pre_check and not self._specs_pass(self._check_specs(t.pre_check, image)):
+            if t.pre_check and not self._specs_pass(
+                    self._check_specs(t.pre_check, image, label=f"pre#{attempt}")):
                 last_detail = f"pre_check 未通过: {t.pre_check}"
-                self._log("WARNING", f"转移 {t.name} 第{attempt}/{t.max_retries}次: {last_detail}")
-                self.ctx.save_debug_image(f"{t.name}_precheck_{attempt}", image)
+                self._log("WARNING", f"转移 {t.name} 第{attempt}/{t.max_retries}次: {last_detail} {pre_frame}")
                 time.sleep(t.retry_wait_ms / 1000.0)
                 continue
 
@@ -313,14 +372,13 @@ class Runner:
             # 只是复检识别漏判触发了重试——此时再点一次会把 toggle 型
             # 控件关回去（实测：8-1N 面板打开后二次点击入口会关掉面板）。
             # 判定必须用【目标状态的完整检查集 + 转移 post_check】，
-            # 不能用弱 post_check 子集：T_battle_popup_supply__battle 的
-            # post_check 只有 [SM81N_battle]，而补给弹窗盖在战斗屏上时
-            # SM81N_battle 仍命中——弱子集会把"弹窗还开着"误判成
-            # "已在 battle"，跳过关弹窗动作（集成测试复现过）。
+            # 不能用弱 post_check 子集（弱子集会把"弹窗还开着"误判成
+            # "已在目标态"，跳过关弹窗动作——集成测试复现过）。
             target_state = self._require_state(t.to_state)
             guard_specs = list(target_state.checks) + list(t.post_check or [])
-            if guard_specs and self._specs_pass(self._check_specs(guard_specs, image)):
-                self._log("INFO", f"转移 {t.name}: 动作前已在目标态，跳过动作")
+            if guard_specs and self._specs_pass(
+                    self._check_specs(guard_specs, image, label=f"guard#{attempt}")):
+                self._log("INFO", f"转移 {t.name}: 动作前已在目标态，跳过动作 {pre_frame}")
                 return
 
             try:
@@ -329,7 +387,7 @@ class Runner:
                     self.ctx.do_action(action)
             except SMError as e:
                 last_detail = f"动作执行失败: {e}"
-                self._log("WARNING", f"转移 {t.name} 第{attempt}/{t.max_retries}次: {last_detail}")
+                self._log("WARNING", f"转移 {t.name} 第{attempt}/{t.max_retries}次: {last_detail} {pre_frame}")
                 time.sleep(t.retry_wait_ms / 1000.0)
                 continue
 
@@ -344,21 +402,21 @@ class Runner:
             image = None
             for _ in range(5):
                 image = self.ctx.screenshot()
-                results = self._check_specs(t.post_check, image)
+                results = self._check_specs(t.post_check, image, label=f"post#{attempt}")
                 if self._specs_pass(results):
                     passed = True
                     break
                 self._abort_if_stopped()
                 time.sleep(0.4)
+            post_frame = self._frame(f"{t.name}_post{attempt}", image) if image is not None else ""
             if passed:
-                self._log("INFO", f"转移成功: {t.name} (第{attempt}次)")
+                self._log("INFO", f"转移成功: {t.name} (第{attempt}次) {post_frame}")
                 return
 
             failed = [r for r in results if not r.ok]
-            last_detail = f"post_check 未通过: {[r.spec for r in failed]}"
-            self._log("WARNING", f"转移 {t.name} 第{attempt}/{t.max_retries}次: {last_detail}")
-            if image is not None:
-                self.ctx.save_debug_image(f"{t.name}_postcheck_{attempt}", image)
+            failed_names = [f"{'!' if r.spec.inverted else ''}{r.spec.node}" for r in failed]
+            last_detail = f"post_check 未通过: {failed_names}"
+            self._log("WARNING", f"转移 {t.name} 第{attempt}/{t.max_retries}次: {last_detail} {post_frame}")
             if attempt < t.max_retries:
                 time.sleep(t.retry_wait_ms / 1000.0)
 
@@ -370,16 +428,16 @@ class Runner:
         target_state = self._require_state(target)
 
         image = self.ctx.screenshot()
-        if self._specs_pass(self._check_specs(target_state.checks, image)):
+        if self._specs_pass(self._check_specs(target_state.checks, image, label=f"goto:{target}")):
             self._log("DEBUG", f"已在目标状态 {target}，跳过")
             return
 
         current = self.locate_state(image)
         if current is None:
-            self.ctx.save_debug_image(f"unknown_state_goto_{target}", image)
+            frame = self._frame(f"unknown_state_goto_{target}", image)
             raise StateMismatchError(
                 f"无法定位当前状态（goto {target}）。"
-                f"流的状态集: {[s.name for s in self.flow.states]}"
+                f"流的状态集: {[s.name for s in self.flow.states]} {frame}"
             )
         if current == target:
             self._log("DEBUG", f"定位={target} 但检查未通过（瞬态），按已到达处理")
@@ -387,26 +445,35 @@ class Runner:
 
         t = self._transitions.get((current, target))
         if t is None:
-            self.ctx.save_debug_image(f"no_transition_{current}_to_{target}", image)
+            frame = self._frame(f"no_transition_{current}_to_{target}", image)
             available = sorted(f"{a}->{b}" for (a, b) in self._transitions)
             raise NoTransitionError(
-                f"没有 {current} -> {target} 的转移。已定义: {available}"
+                f"没有 {current} -> {target} 的转移。已定义: {available} {frame}"
             )
+        self._log("INFO", f"goto {target}: 定位={current}")
         self.run_transition(t)
 
     def wait_until(self, step: WaitUntil) -> None:
         deadline = time.monotonic() + step.timeout_ms / 1000.0
         poll = step.poll_ms / 1000.0
+        checks_label = " ".join(f"{'!' if c.inverted else ''}{c.node}" for c in step.checks)
+        first_frame = ""
+        n_polls = 0
         while True:
             self._abort_if_stopped()
             image = self.ctx.screenshot()
-            if self._specs_pass(self._check_specs(step.checks, image)):
-                self._log("INFO", f"等待完成: {step.checks}")
+            n_polls += 1
+            if not first_frame:
+                first_frame = self._frame(f"wait_{checks_label}_p1", image)
+            if self._specs_pass(self._check_specs(step.checks, image, label=f"wait#{n_polls}")):
+                frame = self._frame(f"wait_{checks_label}_done_p{n_polls}", image)
+                self._log("INFO", f"等待完成: [{checks_label}] 轮询{n_polls}次 {frame}")
                 return
             if time.monotonic() >= deadline:
-                self.ctx.save_debug_image(f"wait_timeout_{self.flow.name}", image)
-                raise CheckFailedError(f"等待超时({step.timeout_ms}ms): {step.checks}")
-            self._log("DEBUG", f"等待中: {step.checks} (每{int(poll*1000)}ms轮询)")
+                frame = self._frame(f"wait_{checks_label}_timeout_p{n_polls}", image)
+                raise CheckFailedError(
+                    f"等待超时({step.timeout_ms}ms): [{checks_label}] 轮询{n_polls}次 {frame}")
+            self._log("DEBUG", f"等待中: [{checks_label}] 第{n_polls}轮 每{int(poll*1000)}ms {first_frame}")
             time.sleep(poll)
 
     # ---------------- 流执行 ----------------
@@ -429,11 +496,13 @@ class Runner:
                 self.wait_until(step)
             elif isinstance(step, Branch):
                 image = self.ctx.screenshot()
-                if self._specs_pass(self._check_specs(step.when, image)):
-                    self._log("DEBUG", f"分支命中 {step.when}: 执行 then")
+                frame = self._frame(f"branch_{'_'.join('!' + c.node if c.inverted else c.node for c in step.when)}", image)
+                when_s = " ".join(f"{'!' if c.inverted else ''}{c.node}" for c in step.when)
+                if self._specs_pass(self._check_specs(step.when, image, label="branch")):
+                    self._log("INFO", f"分支命中 [{when_s}] -> then {frame}")
                     self._run_steps(step.then_steps)
                 else:
-                    self._log("DEBUG", f"分支未命中 {step.when}: 执行 else")
+                    self._log("INFO", f"分支未命中 [{when_s}] -> else {frame}")
                     self._run_steps(step.else_steps)
             elif isinstance(step, Repeat):
                 i = 0

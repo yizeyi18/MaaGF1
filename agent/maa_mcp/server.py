@@ -196,10 +196,11 @@ def register_tools(server: "object") -> None:
 
     @server.tool()
     def run_sm_8_1n(session_id: str, rounds: Union[int, str] = 1,
-                    timeout_ms: int = 3600000) -> object:
-        """运行 8-1N 循环状态机流。rounds: 正整数轮数；-1 或 "inf" = 无限循环（stop_sm 停止）。"""
+                    timeout_ms: int = 3600000, frame_log: str = "key") -> object:
+        """运行 8-1N 循环状态机流。rounds: 正整数轮数；-1 或 "inf" = 无限循环（stop_sm 停止）。
+        frame_log: key=仅关键帧(转移前后/分支/等待/未命中) | all=每次识别 | off=关闭；帧在 debug_sm/。"""
         return _call("run_sm_8_1n", session_id=session_id, rounds=rounds,
-                     timeout_ms=timeout_ms)
+                     timeout_ms=timeout_ms, frame_log=frame_log)
 
     @server.tool()
     def stop_sm(session_id: str = "") -> object:

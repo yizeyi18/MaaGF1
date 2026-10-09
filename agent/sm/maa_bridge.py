@@ -75,13 +75,31 @@ def _agent_capture() -> Optional[object]:
 
 class MaaBridge(SMContext):
     def __init__(self, context: Context, stop_event: threading.Event,
-                 debug_dir: str = "debug_sm", stop_file: str = ""):
+                 debug_dir: str = "debug_sm", stop_file: str = "",
+                 frame_log: str = "key"):
         self._ctx = context
         self._ctrl = context.tasker.controller
         self._stop = stop_event
         self._debug_dir = debug_dir
         self._stop_file = stop_file
         self._missing_warned: set = set()
+        self._frame_log = frame_log  # all=每次识别落帧 | key=仅未命中落帧 | off
+        self._reco_n = 0
+
+    @property
+    def frame_log(self) -> str:
+        return self._frame_log
+
+    def _reco_frame(self, node: str, image: "object", hit: bool) -> str:
+        """按 frame_log 模式落识别帧（all=总是，key=仅未命中），返回路径。"""
+        if self._frame_log == "off" or (self._frame_log == "key" and hit):
+            return ""
+        self._reco_n += 1
+        tag = f"reco_{self._reco_n:05d}_{node}_{'hit' if hit else 'miss'}"
+        try:
+            return self.save_debug_image(tag, image) or ""
+        except Exception:
+            return ""
 
     def _warn_missing_once(self, node: str) -> None:
         if node not in self._missing_warned:
@@ -130,10 +148,13 @@ class MaaBridge(SMContext):
         if image is None:
             image = self.screenshot()
         detail = self._recognize(spec.node, image)
+        hit = bool(detail.hit) if detail is not None else False
+        frame = self._reco_frame(spec.node, image, hit)
+        if frame:
+            self.log("DEBUG", f"reco {spec.node} -> {'hit' if hit else 'miss'} frame={frame}")
         if detail is None:
             # 识别失败/无详情 → 按"未命中"处理（与 MCP bridge 同语义）
             return CheckResult(ok=spec.inverted, spec=spec, detail=None)
-        hit = bool(detail.hit)
         return CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
 
     def _detail_from_event(self, reco_id: int):
@@ -192,7 +213,9 @@ class MaaBridge(SMContext):
             image = self.screenshot()
             detail = self._recognize(a.if_node, image)
             if detail is None or not detail.hit:
-                self.log("DEBUG", f"可选动作跳过（{a.if_node} 未命中）: {a.describe()}")
+                frame = self._reco_frame(f"if_{a.if_node}", image, False)
+                self.log("DEBUG", f"可选动作跳过（{a.if_node} 未命中）: {a.describe()}"
+                         + (f" frame={frame}" if frame else ""))
                 return
             if a.anchor_node and a.anchor_node == a.if_node:
                 x, y = self._center(detail, a)
@@ -202,11 +225,18 @@ class MaaBridge(SMContext):
                 image = self.screenshot()
             detail = self._recognize(a.anchor_node, image)
             if detail is None or not detail.hit or detail.box is None:
-                self.save_debug_image(f"anchor_miss_{a.anchor_node}", image)
+                frame = self.save_debug_image(f"anchor_miss_{a.anchor_node}", image)
+                self.log("WARNING", f"锚点 {a.anchor_node} -> miss（动作 {a.describe()}）"
+                         + (f" frame={frame}" if frame else ""))
                 raise ActionAnchorMissError(
                     f"锚点识别未命中: {a.anchor_node}（动作 {a.describe()}）"
                 )
             x, y = self._center(detail, a)
+            from .boxutil import box_xywh
+
+            bx, by, bw, bh = box_xywh(detail.box)
+            self.log("INFO", f"锚点 {a.anchor_node} -> hit box=({bx},{by},{bw},{bh})"
+                         f" -> {a.kind} ({x},{y})")
 
         if a.kind == "click":
             self._ctrl.post_click(x, y).wait()
@@ -222,6 +252,9 @@ class MaaBridge(SMContext):
             self._pinch(x, y, dist=abs(a.duration) or 60, inward=True)
         else:
             raise SMError(f"未知动作类型: {a.kind}")
+        if not a.anchor_node:
+            extra = f" -> ({a.x2},{a.y2})" if a.kind == "swipe" else ""
+            self.log("INFO", f"动作 {a.kind} ({x},{y}){extra}")
         self.log("DEBUG", f"动作完成: {a.describe()}")
 
     @staticmethod
