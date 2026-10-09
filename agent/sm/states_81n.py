@@ -6,9 +6,11 @@
 2. 战斗锚点用 bar_end（结束回合按钮，战斗屏恒在），不用 妖精 面板
    （仅单位被选中时出现、且 OCR 不稳定）；妖精 只用于"战后 1队自动
    选中"（postbattle）与"战后未选中"（battle_no2）的区分。
-3. 战前机场框（squad1_box/squad2_box，开始作战可见）/ 战斗中 2队框
-   （t2_box，补给可见）/ 战后 1队框（t1_wd_popup，结束回合可见）按
-   上下文区分；框内"补给+撤离"同屏，靠上下文而非按钮区分。
+3. 机场框族：战前框（squad1_box/squad2_box）与战后 1队框（t1_wd_popup）
+   是同一种全屏"选择梯队"面板，识别特征完全一致（撤离+取消；开始作战
+   /结束回合 按钮文字被框按钮盖住、OCR 恒 miss——2026-10-09 实机复现，
+   框屏检查禁用 start）→ 三者不可区分，靠流程上下文 + 宽容转移；
+   战中 2队框（t2_box）独有 补给 按钮 → 用 !supply 把框族与它分开。
 4. 计划 AP 实测 7 → 1（录入 2 个计划点后），旧 3/2/1 假设作废：
    plan 族只区分"AP=1 已达成"（plan_done），中间值不检查。
 5. 入口弹药检查：直接开 1队框读"弹药 X/Y"行（OCR \\b0/），不用
@@ -76,20 +78,28 @@ S_MAP_FULL = State(
     locate_priority=27,
 )
 
-# ---- 战前机场框（入口弹药检查 / 编队入口）----
-# 框内 撤离 按钮 + 开始作战 按钮可见（框右缘~1050，开始作战按钮可见）。
-# squad1/squad2 两个状态同屏（无法识别区分），仅用于区分转移来源
-# （1队框→取消关框 / 2队框→队伍编成）；locate 歧义无害（动作同源）。
+# ---- 机场框（入口弹药检查 / 编队入口 / 战后撤 1队）----
+# 框屏特征 = 撤离+取消 按钮（实机 OCR 验证命中）。注意：框屏上"开始作战"
+# 按钮虽露出黄色底但文字被框按钮盖住，OCR 恒 miss（2026-10-09 实机复现）
+# → 框屏检查一律不用 start；start 只在地图屏（按钮完整可见）使用。
+# 战前框（1队/2队）与战后 1队框是同一种全屏"选择梯队"面板，四个 OCR
+# 特征（撤离/取消/开始作战/结束回合）在三种框屏上表现完全一致 →
+# 识别上不可区分，靠【流程上下文】区分（goto 目标检查短路 + 宽容转移）；
+# locate 恒返回 squad1_box（优先级 26、名称序在前），所有框屏出边转移
+# 都挂在 squad1_box 上（幂等守卫按目标状态检查，歧义无害）。
+# !supply 排除战中 2队框（补给按钮是其独有特征 → 落到 t2_box）。
 S_SQUAD1_BOX = State(
     name="squad1_box",
-    checks=[C("SM81N_t1wd"), C("SM81N_start")],
-    desc="战前机场框（1队打开，开始作战可见）",
+    checks=[C("SM81N_t1wd"), C("SM81N_box_cancel"),
+            C("SM81N_supply", inverted=True)],
+    desc="战前机场框（1队打开，撤离+取消可见）",
     locate_priority=26,
 )
 S_SQUAD2_BOX = State(
     name="squad2_box",
-    checks=[C("SM81N_t1wd"), C("SM81N_start")],
-    desc="战前机场框（2队打开，开始作战可见）",
+    checks=[C("SM81N_t1wd"), C("SM81N_box_cancel"),
+            C("SM81N_supply", inverted=True)],
+    desc="战前机场框（2队打开，撤离+取消可见）",
     locate_priority=26,
 )
 
@@ -154,8 +164,11 @@ S_POSTBATTLE = State(
 )
 S_T1_WD_POPUP = State(
     name="t1_wd_popup",
-    # 战后 1队框（撤离可见、战前上下文排除、框屏补给按钮排除）
-    checks=[C("SM81N_t1wd"), C("SM81N_start", inverted=True),
+    # 战后 1队框 = 与战前框同布局的"选择梯队"面板（撤离+取消可见、
+    # 无补给）。识别上与 squad1_box 不可区分（见上）——此状态仅作为
+    # 转移目标名（goto 目标检查短路 + T_*__t1_wd_popup 的动作来源），
+    # locate 实际恒返回 squad1_box，出边走 T_squad1_box__withdraw_ok。
+    checks=[C("SM81N_t1wd"), C("SM81N_box_cancel"),
             C("SM81N_supply", inverted=True)],
     desc="战后 1队框（撤离可见）",
     locate_priority=44,
@@ -298,7 +311,7 @@ def transitions_81n() -> list[Transition]:
                 _anchor("SM81N_map_t1"),  # 点击地图 1队 标记 → 机场框
                 ActionSpec(kind="wait", ms=500),
             ],
-            post_check=[C("SM81N_t1wd"), C("SM81N_start")],
+            post_check=[C("SM81N_t1wd"), C("SM81N_box_cancel")],
             max_retries=5, retry_wait_ms=1000,
         ),
         Transition(
@@ -312,6 +325,34 @@ def transitions_81n() -> list[Transition]:
                         C("SM81N_map_t3"), C("SM81N_start")],
             max_retries=3,
         ),
+        Transition(
+            name="T_squad1_box__withdraw_ok",
+            # 宽容转移：战后 1队框与战前框同布局，locate 恒返回 squad1_box
+            # （见状态注释）——战后重置的"点撤离"从 squad1_box 出边执行。
+            from_state="squad1_box", to_state="withdraw_ok",
+            actions=[
+                _anchor("SM81N_t1wd"),
+                ActionSpec(kind="wait", ms=300),
+            ],
+            post_check=[C("SM81N_withdraw_confirm")],
+            max_retries=5, retry_wait_ms=1000,
+        ),
+        Transition(
+            name="T_squad1_box__endmenu",
+            # 宽容转移：撤离确认对话框屏若被 locate 判成 squad1_box
+            # （框按钮隔着半透明遮罩仍可 OCR），也要能"确定→菜单"。
+            # 确定按钮 if_node 条件点（对话框已关时跳过，防重复点）。
+            from_state="squad1_box", to_state="endmenu",
+            actions=[
+                _anchor("SM81N_withdraw_confirm",
+                        if_node="SM81N_withdraw_confirm"),
+                ActionSpec(kind="wait", ms=500),
+                _click(324, 39),  # 左上角菜单（原 target [298,23,53,32] 中心）
+                ActionSpec(kind="wait", ms=500),
+            ],
+            post_check=[C("SM81N_redeploy")],
+            max_retries=3,
+        ),
 
         # ---------- 编队链（入口 else 分支 / 稳定态 共用；从 2队框 进入） ----------
         Transition(
@@ -321,7 +362,7 @@ def transitions_81n() -> list[Transition]:
                 _anchor("SM81N_map_t2"),  # 点击地图 2队 标记 → 机场框
                 ActionSpec(kind="wait", ms=500),
             ],
-            post_check=[C("SM81N_t1wd"), C("SM81N_start")],
+            post_check=[C("SM81N_t1wd"), C("SM81N_box_cancel")],
             max_retries=5, retry_wait_ms=1000,
         ),
         Transition(

@@ -1,0 +1,12 @@
+--- a/common_st.json
++++ b/common_st.json
+@@ -15,4 +15,4 @@
+ 		"threshold": 0.8,
+
+ 		"next": []
+
+ 	}
+
+-}
+
++}
