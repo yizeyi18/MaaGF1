@@ -212,7 +212,10 @@ jobs:
         run: |
           git diff --name-only
           
-          if [ -n "$(git status --porcelain)" ]; then
+          # 只看已跟踪文件的实际改动：git status --porcelain 会把
+          # pipeline_diffs/ 等未跟踪产物算进去，导致无 JSON 改动时
+          # 仍进入 commit 步骤（nothing to commit → 失败）
+          if [ -n "$(git diff --name-only)" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
             CHANGED_COUNT=$(git diff --name-only | wc -l)
             echo "changed_files=$CHANGED_COUNT" >> $GITHUB_OUTPUT
