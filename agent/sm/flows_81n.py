@@ -24,7 +24,7 @@ rounds=None = 无限循环（外部 stop 事件停止）。
 """
 from __future__ import annotations
 
-from .core import Branch, Flow, GotoState, PanNormalize, Repeat, WaitUntil, CheckSpec
+from .core import Branch, Flow, GotoState, PanNormalize, Repeat, WaitUntil, CheckSpec, SetFlag
 from .states_81n import states_81n, transitions_81n
 from .states_common import common_states
 
@@ -77,12 +77,18 @@ def build_flow_81n(rounds: int = 1) -> Flow:
         GotoState("map_full"),
 
         # ---------- 入口弹药检查：直接查 1队（打手弹药），不用 2队 代理 ----------
+        # rotated_this_cycle 标志：本战斗周期是否已轮换打手。入口轮换与轮内
+        # 稳定态轮换互斥（一个战斗周期至多一次）——run#8（2026-10-10）实测：
+        # 入口轮换后 2队徽章即变满弹，第 1 轮稳定态误判"上轮补给过"再次轮换，
+        # 两次轮换之间没有战斗（用户判为逻辑错误）。
         GotoState("squad1_box"),
         Branch(
             when=[C("SM81N_squad1_zero", inverted=True)],
-            then_steps=[GotoState("map_full")],  # 打手有弹：关框，不编队
+            then_steps=[GotoState("map_full"),  # 打手有弹：关框，不编队
+                        SetFlag("rotated_this_cycle", False)],
             else_steps=[GotoState("map_full"),  # 打手耗空：关框 → 编队轮换
-                        *_FORMATION_CHAIN],
+                        *_FORMATION_CHAIN,
+                        SetFlag("rotated_this_cycle", True)],
         ),
 
         # ---------- 循环体 ----------
@@ -92,9 +98,12 @@ def build_flow_81n(rounds: int = 1) -> Flow:
             PAN_NORM,
 
             # 稳定态弹药检查：2队地图徽章（Gnewfullammo 先查"有"；
-            # Gnewnoammo 有已知误报，不用它做分支条件）
+            # Gnewnoammo 有已知误报，不用它做分支条件）。
+            # python_cond：与入口轮换互斥——本周期已轮换（入口或上轮末）则跳过，
+            # 防止"入口轮换 → 徽章满弹 → 第 1 轮稳定态再轮换"的双轮换故障。
             Branch(when=[C("SM81N_ammo_full")],
-                   then_steps=list(_FORMATION_CHAIN)),
+                   python_cond=lambda r: not r.flags.get("rotated_this_cycle", False),
+                   then_steps=list(_FORMATION_CHAIN) + [SetFlag("rotated_this_cycle", True)]),
 
             # 开始作战（装备溢出弹窗在 T_map_full__battle 内自愈）
             GotoState("battle"),
@@ -120,6 +129,8 @@ def build_flow_81n(rounds: int = 1) -> Flow:
             GotoState("withdraw_ok"),
             GotoState("endmenu"),
             GotoState("map_full"),
+            # 轮完成：清轮换标志，下一轮稳定态可再次轮换
+            SetFlag("rotated_this_cycle", False),
         ]),
     ]
 

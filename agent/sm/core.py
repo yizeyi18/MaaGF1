@@ -19,7 +19,7 @@ from __future__ import annotations
 import abc
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 
 # ======================================================================================
@@ -194,10 +194,25 @@ class WaitUntil(FlowStep):
 
 @dataclass
 class Branch(FlowStep):
-    """条件分支：when 全部成立执行 then_steps，否则执行 else_steps。"""
+    """条件分支：when 全部成立执行 then_steps，否则执行 else_steps。
+
+    python_cond：可选的运行时条件（Runner -> bool）。识别检查之外补充
+    "流内记忆"类条件，典型用途：入口编队与轮内稳定态编队互斥
+    （一个战斗周期内至多轮换一次打手——run#8 双轮换故障修复，
+    2026-10-10：入口轮换后 2队徽章即满弹，第 1 轮稳定态误判
+    "上轮补给过"再次轮换，两次轮换之间没有战斗）。
+    """
     when: List[CheckSpec]
     then_steps: List[FlowStep] = field(default_factory=list)
     else_steps: List[FlowStep] = field(default_factory=list)
+    python_cond: Optional[Callable[["Runner"], bool]] = None
+
+
+@dataclass
+class SetFlag(FlowStep):
+    """设置运行时标志（Runner.flags），供 Branch.python_cond 读取。"""
+    name: str
+    value: bool = True
 
 
 @dataclass
@@ -252,6 +267,45 @@ class Flow:
                 raise ValueError(f"转移 {t.name} 的端点不在流的状态集中")
             if not t.post_check:
                 raise ValueError(f"转移 {t.name} 缺少 post_check（需求：每次转移必配状态检查）")
+
+    # ---------------- 转移图查询（路径规划接口） ----------------
+
+    def transitions_from(self, state: str) -> List[Transition]:
+        """从状态 state 出发的全部状态转移（可用转移）。"""
+        return [t for t in self.transitions if t.from_state == state]
+
+    def reachable(self, state: str) -> List[str]:
+        """从 state 一步可达的状态名列表（去重、保序）。"""
+        seen, out = set(), []
+        for t in self.transitions_from(state):
+            if t.to_state not in seen:
+                seen.add(t.to_state)
+                out.append(t.to_state)
+        return out
+
+    def shortest_path(self, a: str, b: str) -> Optional[List[str]]:
+        """BFS 最短路径（状态名序列，含端点）；不可达返回 None。"""
+        if a == b:
+            return [a]
+        from collections import deque
+
+        adj: Dict[str, List[str]] = {}
+        for t in self.transitions:
+            adj.setdefault(t.from_state, []).append(t.to_state)
+        prev: Dict[str, Optional[str]] = {a: None}
+        q = deque([a])
+        while q:
+            cur = q.popleft()
+            for nxt in adj.get(cur, ()):
+                if nxt not in prev:
+                    prev[nxt] = cur
+                    if nxt == b:
+                        path = [b]
+                        while prev[path[-1]] is not None:
+                            path.append(prev[path[-1]])
+                        return path[::-1]
+                    q.append(nxt)
+        return None
 
 
 # ======================================================================================
@@ -315,6 +369,7 @@ class Runner:
         self._transitions = {(t.from_state, t.to_state): t for t in flow.transitions}
         self.round_finished = 0
         self._seq = 0  # 步骤帧序号（日志与帧文件一一对应）
+        self.flags: Dict[str, bool] = {}  # 运行时标志（SetFlag / Branch.python_cond）
 
     # ---------------- 基础 ----------------
 
@@ -373,10 +428,15 @@ class Runner:
 
     # ---------------- 状态定位 ----------------
 
-    def locate_state(self, image: object) -> Optional[str]:
-        """在同一张截图上按优先级尝试各状态，返回第一个全部检查通过的状态名。"""
+    def locate_state(self, image: object, skip: Optional[str] = None) -> Optional[str]:
+        """在同一张截图上按优先级尝试各状态，返回第一个全部检查通过的状态名。
+
+        skip：跳过该状态（其检查已知不通过，避免重复识别，见 goto 快路径）。
+        """
         ordered = sorted(self.flow.states, key=lambda s: (s.locate_priority, s.name))
         for state in ordered:
+            if skip is not None and state.name == skip:
+                continue
             results = self._check_specs(state.checks, image)
             if self._specs_pass(results):
                 return state.name
@@ -465,7 +525,8 @@ class Runner:
             self._log("DEBUG", f"已在目标状态 {target}，跳过")
             return
 
-        current = self.locate_state(image)
+        # 目标状态检查刚失败过：全扫描时跳过，避免重复识别同一状态
+        current = self.locate_state(image, skip=target)
         if current is None:
             frame = self._frame(f"unknown_state_goto_{target}", image)
             raise StateMismatchError(
@@ -570,7 +631,13 @@ class Runner:
                 image = self.ctx.screenshot()
                 frame = self._frame(f"branch_{'_'.join('!' + c.node if c.inverted else c.node for c in step.when)}", image)
                 when_s = " ".join(f"{'!' if c.inverted else ''}{c.node}" for c in step.when)
-                if self._specs_pass(self._check_specs(step.when, image, label="branch")):
+                hit = self._specs_pass(self._check_specs(step.when, image, label="branch"))
+                if hit and step.python_cond is not None:
+                    cond = step.python_cond(self)
+                    if not cond:
+                        self._log("INFO", f"分支识别命中但运行时条件不满足 -> else {frame}")
+                        hit = False
+                if hit:
                     self._log("INFO", f"分支命中 [{when_s}] -> then {frame}")
                     self._run_steps(step.then_steps)
                 else:
@@ -586,6 +653,9 @@ class Runner:
                     self.round_finished = max(self.round_finished, i)
             elif isinstance(step, PanNormalize):
                 self.run_pan_normalize(step)
+            elif isinstance(step, SetFlag):
+                self.flags[step.name] = step.value
+                self._log("DEBUG", f"标志 {step.name} = {step.value}")
             else:
                 raise SMError(f"未知流步骤类型: {type(step)}")
 
