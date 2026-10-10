@@ -98,7 +98,7 @@ class CheckResult:
 class ActionSpec:
     """一个原子动作。
 
-    kind: click | long_press | swipe | zoom_in | zoom_out | wait
+    kind: click | long_press | swipe | zoom_in | zoom_out | wait | pan_norm
     - 坐标：x,y（起点/中心）；swipe 用 x2,y2 作终点；duration 为毫秒
     - 锚点：anchor_node 非空时，先对该节点识别，命中框中心 (+dx,+dy) 作为点击/长按位置
     - 可选：if_node 非空时，仅当该识别命中才执行本动作（用于弹窗等可选分支）
@@ -117,6 +117,11 @@ class ActionSpec:
     dy: int = 0
     if_node: str = ""
     unless_node: str = ""
+    # kind="pan_norm" 专用：pan_node=地标节点，(x,y)=参考平移位 top-left。
+    # 桥接层执行与 PanNormalize 相同的全屏地标搜索+拖动归一化。
+    # 2026-10-10 实机：部署/长按会把地图相机平移走，转移内自带再归一化，
+    # 否则后续固定 ROI 检查与锚点全部失效。
+    pan_node: str = ""
 
     def describe(self) -> str:
         parts = [self.kind]

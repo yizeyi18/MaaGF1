@@ -6,7 +6,8 @@
    "type": "TemplateMatch",
    "param": {
     "template": [
-     "combat/levelUp/8-1N/run8_1N_v2.png"
+     "combat/levelUp/8-1N/run8_1N_v2.png",
+     "combat/levelUp/8-1N/run8_1N_midnight.png"
     ],
     "roi": [
      0,
@@ -19,7 +20,8 @@
     ]
    }
   },
-  "next": []
+  "next": [],
+  "$说明": "｜双模板：普通8-1(报告会)+夜战8-1(巨鹰与寒鸦I)"
  },
  "SM81N_stage_detail": {
   "recognition": "OCR",
@@ -32,7 +34,8 @@
   "expected": [
    "普通作战"
   ],
-  "next": []
+  "next": [],
+  "$说明": "8-1 详情页按钮（实测：普通/夜战难度下按钮文案都是'普通作战'，只改难度 tab）"
  },
  "SM81N_map": {
   "recognition": "TemplateMatch",

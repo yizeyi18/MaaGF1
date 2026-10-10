@@ -285,6 +285,8 @@ class MaaBridge(SMContext):
             self._ctrl.post_touch_up(0).wait()
         elif a.kind == "swipe":
             self._ctrl.post_swipe(x, y, a.x2, a.y2, max(a.duration, 100)).wait()
+        elif a.kind == "pan_norm":
+            self._pan_normalize(a)
         elif a.kind == "zoom_in":
             self._pinch(x, y, dist=abs(a.duration) or 60, inward=False)
         elif a.kind == "zoom_out":
@@ -295,6 +297,38 @@ class MaaBridge(SMContext):
             extra = f" -> ({a.x2},{a.y2})" if a.kind == "swipe" else ""
             self.log("INFO", f"动作 {a.kind} ({x},{y}){extra}")
         self.log("DEBUG", f"动作完成: {a.describe()}")
+
+    def _pan_normalize(self, a: ActionSpec) -> None:
+        """kind="pan_norm"：与 Runner.run_pan_normalize 相同的地图平移归一化
+        （全屏地标搜索 → 向 -offset 拖动，几何收敛）。
+
+        2026-10-10 实机：部署/长按后相机会平移到目标单位处，转移尾部
+        自带再归一化，否则后续固定 ROI 检查与锚点全部失效。
+        地标未识别（非地图屏/缩放异常）→ 告警跳过（best-effort）。
+        """
+        from .boxutil import box_xywh
+
+        refx, refy = int(a.x), int(a.y)
+        spec = _smcore().CheckSpec(a.pan_node)
+        for it in range(1, 5):
+            image = self.screenshot()
+            r = self.check(spec, image)
+            if r.detail is None or not r.hit or r.detail.box is None:
+                self.log("WARNING",
+                         f"pan_norm: 地标 {a.pan_node} 未识别（非地图屏/缩放异常），跳过")
+                return
+            bx, by, bw, bh = box_xywh(r.detail.box)
+            ox, oy = bx - refx, by - refy
+            if abs(ox) <= 15 and abs(oy) <= 15:
+                self.log("INFO", f"pan_norm: 已在参考位 offset=({ox},{oy})")
+                return
+            sx, sy = bx + bw // 2, by + bh // 2
+            ex, ey = sx - ox, sy - oy
+            self.log("INFO",
+                     f"pan_norm #{it}: offset=({ox},{oy}) 拖动 ({sx},{sy})->({ex},{ey}) 800ms")
+            self._ctrl.post_swipe(sx, sy, ex, ey, 800).wait()
+            time.sleep(0.5)
+        self.log("WARNING", "pan_norm: 4 次迭代后未完全收敛（继续执行，由后续检查把关）")
 
     @staticmethod
     def _center(detail: "object", a: ActionSpec) -> tuple[int, int]:

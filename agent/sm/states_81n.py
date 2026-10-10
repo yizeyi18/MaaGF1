@@ -236,6 +236,14 @@ def _anchor(node: str, kind: str = "click", **kw) -> ActionSpec:
     return ActionSpec(kind=kind, anchor_node=node, **kw)
 
 
+def _pan_norm() -> ActionSpec:
+    """再归一化动作：部署/长按会把地图相机平移到目标单位处，把地图拖回
+    参考平移位（与入口 PanNormalize 步骤同一逻辑，见 PanNormalize 文档）。
+    参考位 = 地标 SM81N_map_landmark 的 top-left (330,300)。"""
+    return ActionSpec(kind="pan_norm", pan_node="SM81N_map_landmark",
+                      x=330, y=300)
+
+
 def _swap_actions() -> list[ActionSpec]:
     """swap 动作链：编辑栏卡 → "编队中1"徽章卡（全图模板）→ 确定。"""
     return [
@@ -284,14 +292,24 @@ def transitions_81n() -> list[Transition]:
         ),
 
         # ---------- 部署（1队/2队：港口模板锚点 → 确定OCR锚点；3队：重装机场流程） ----------
+        # 2026-10-10 实机修正（run#11 卡死根因）：
+        #   1. 长按必须 ≥500ms（原 duration=20/50 毫秒=普通点击，打不开选队面板，
+        #      部署永不发生 → post_check 永远失败 → 无限重试）。
+        #   2. 部署（或长按）会把地图相机平移到目标单位处并弹出编队面板 →
+        #      转移尾部：可选"确定"（弹层存在才点）→ 点地图空白关面板 →
+        #      pan_norm 再归一化回参考位（否则后续固定 ROI 检查/锚点全灭）。
         Transition(
             name="T_map__map_t1",
             nav_cost=1,  # 连通导航安全边
             from_state="map", to_state="map_t1",
             actions=[
-                _anchor("SM81N_port1", kind="long_press", duration=20),
+                _anchor("SM81N_port1", kind="long_press", duration=1000),
+                ActionSpec(kind="wait", ms=800),
+                _anchor("SM81N_deploy_confirm", if_node="SM81N_deploy_confirm"),
+                ActionSpec(kind="wait", ms=300),
+                _click(400, 300),  # 点地图空白关闭自动弹出的编队面板
                 ActionSpec(kind="wait", ms=500),
-                _anchor("SM81N_deploy_confirm"),
+                _pan_norm(),       # 部署后相机被平移 → 归一化回参考位
             ],
             post_check=[C("SM81N_map_t1")],
             max_retries=3,
@@ -301,9 +319,13 @@ def transitions_81n() -> list[Transition]:
             nav_cost=1,  # 连通导航安全边
             from_state="map_t1", to_state="map_t12",
             actions=[
-                _anchor("SM81N_port2", kind="long_press", duration=50),
+                _anchor("SM81N_port2", kind="long_press", duration=1000),
+                ActionSpec(kind="wait", ms=800),
+                _anchor("SM81N_deploy_confirm", if_node="SM81N_deploy_confirm"),
+                ActionSpec(kind="wait", ms=300),
+                _click(400, 300),
                 ActionSpec(kind="wait", ms=500),
-                _anchor("SM81N_deploy_confirm"),
+                _pan_norm(),
             ],
             post_check=[C("SM81N_map_t2")],
             max_retries=3,
@@ -315,14 +337,17 @@ def transitions_81n() -> list[Transition]:
             # （映射 部署.json 81N部署_部署3队/部署重装/部署重装选择/部署重装确定）
             from_state="map_t12", to_state="map_full",
             actions=[
-                _anchor("SM81N_porth", kind="long_press", duration=20),
-                ActionSpec(kind="wait", ms=500),
+                _anchor("SM81N_porth", kind="long_press", duration=1000),
+                ActionSpec(kind="wait", ms=800),
                 _click(589, 90),  # "选择重装部队"tab（原 target [560,74,59,31] 中心）
+                ActionSpec(kind="wait", ms=800),
+                _anchor("SM81N_deploy_list_first"),  # 点第一个重装单位行（选中）
                 ActionSpec(kind="wait", ms=500),
-                _anchor("SM81N_deploy_list_first", kind="long_press", duration=20),
-                ActionSpec(kind="wait", ms=300),
-                _anchor("SM81N_deploy_confirm"),
+                _anchor("SM81N_deploy_confirm"),     # 部署按钮（重装弹层必有）
                 ActionSpec(kind="wait", ms=1000),
+                _click(150, 600),  # 关面板/兜底关弹层（重装弹层左侧空白，避开其单位行）
+                ActionSpec(kind="wait", ms=500),
+                _pan_norm(),
             ],
             post_check=[C("SM81N_map_t3"), C("SM81N_start")],
             max_retries=3,
