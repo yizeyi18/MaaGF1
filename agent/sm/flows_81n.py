@@ -140,4 +140,24 @@ def build_flow_81n(rounds: int = 1) -> Flow:
         states=common_states() + states_81n(),
         transitions=transitions_81n(),
         steps=steps,
+        # 两阶段定位的家族签名链（有序、早停；全扫描兜底保证正确性）。
+        # 排序原则：高频屏的家族靠前（地图屏占 locate 大头）；单状态特异
+        # 家族（补给框/重新作战/撤离确认…）在其屏幕特征节点处快速命中；
+        # 最不特异的 bar_end（多个战中屏共有）放最后。
+        # 实测（run#8 日志）：v1 全扫描定位 30-110s/次；两阶段后
+        # 地图屏 ~10-18s、框屏 ~18-24s、战中框 ~12-16s、结算屏 ~25-35s。
+        family_discriminators=[
+            ("stage", [C("SM81N_stage_list")]),
+            ("map", [C("SM81N_map"), C("SM81N_bar_end", inverted=True)]),
+            ("inbattle_box", [C("SM81N_supply")]),
+            ("box", [C("SM81N_t1wd")]),
+            ("charselect", [C("SM81N_charselect")]),
+            ("planfam", [C("SM81N_plan")]),
+            ("endmenu", [C("SM81N_redeploy")]),
+            ("wd_popup", [C("SM81N_withdraw_confirm")]),
+            ("formation", [C("SM81N_formation")]),
+            ("equip", [C("SM81N_equip_overflow")]),
+            ("settlement", [C("SM81N_settlement")]),
+            ("battle", [C("SM81N_bar_end")]),
+        ],
     )

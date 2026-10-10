@@ -32,6 +32,7 @@ S_MAIN = State(
 #: （实测 0.942），会把 stage_detail 遮蔽掉——必须配反向检查排除。
 S_STAGE_LIST = State(
     name="stage_list",
+    family="stage",
     checks=[CheckSpec("SM81N_stage_list"),
             CheckSpec("SM81N_stage_detail", inverted=True)],
     desc="战斗关卡选择列表（可见 8-1N 入口按钮）",
@@ -41,6 +42,7 @@ S_STAGE_LIST = State(
 #: 8-1N 关卡详情（"普通作战"按钮）
 S_STAGE_DETAIL = State(
     name="stage_detail",
+    family="stage",
     checks=[CheckSpec("SM81N_stage_detail")],
     desc="8-1N 关卡详情（普通作战按钮）",
     locate_priority=11,
@@ -49,6 +51,7 @@ S_STAGE_DETAIL = State(
 #: 编成界面
 S_FORMATION = State(
     name="formation",
+    family="formation",
     checks=[CheckSpec("SM81N_formation")],
     desc="编成界面（阵型编成）",
     locate_priority=22,
@@ -65,6 +68,7 @@ S_FORMATION = State(
 #: 故本状态优先级必须高于 charselect/charselect_shown。
 S_CHARSELECT_FILTER = State(
     name="charselect_filter",
+    family="charselect",
     checks=[CheckSpec("SM81N_popup_confirm")],
     desc="编成-角色选择·筛选弹层（显示种类已展开）",
     locate_priority=18,
@@ -75,6 +79,7 @@ S_CHARSELECT_FILTER = State(
 #: 第二轮进选人屏直接就是本状态，goto 短路跳过 toggle（幂等）。
 S_CHARSELECT_SHOWN = State(
     name="charselect_shown",
+    family="charselect",
     checks=[CheckSpec("SM81N_charselect"),
             CheckSpec("SM81N_filter_all", inverted=True)],
     desc="编成-角色选择（收藏筛选生效中，标签=选择中）",
@@ -86,6 +91,7 @@ S_CHARSELECT_SHOWN = State(
 #: 短路；筛选态的区分交给 charselect_shown（优先级更高，locate 先判）。
 S_CHARSELECT = State(
     name="charselect",
+    family="charselect",
     checks=[CheckSpec("SM81N_charselect")],
     desc="编成-角色选择·基础屏（弹层关闭）",
     locate_priority=21,

@@ -148,6 +148,7 @@ class State:
     checks: List[CheckSpec]
     desc: str = ""
     locate_priority: int = 100  # 越小越先尝试（越"具体"的状态越靠前）
+    family: Optional[str] = None  # 状态家族（两阶段定位：家族判别链先筛后验，见 locate_state）
 
     def __repr__(self) -> str:
         return f"State({self.name}: {self.checks})"
@@ -164,6 +165,13 @@ class Transition:
     max_retries: int = 3
     retry_wait_ms: int = 800
     post_wait_ms: int = 300  # 动作完成后等待 UI 稳定的时间
+    # 连通导航代价（"基于连通步数的状态转移"）：
+    # None = 动作边，不得用于自动连通导航（开战斗/补给/撤离/换人/筛选等有
+    #       真实后果的转移，只能由流显式执行）；
+    # int  = 可导航边（取消/返回/关框/部署/入场等安全或可恢复的转移），
+    #       值越小越优先（BFS 步数导航在同层内按代价排序）。
+    # 直接边 goto 不受此限制：(current->target) 有边就直接走。
+    nav_cost: Optional[int] = None
 
     def describe(self) -> str:
         acts = " ; ".join(a.describe() for a in self.actions) or "(无动作)"
@@ -257,6 +265,14 @@ class Flow:
     states: List[State]
     transitions: List[Transition]
     steps: List[FlowStep]
+    # 两阶段定位的家族签名链（有序，早停）：(家族名, 签名检查列表)。
+    # 签名 = 该家族屏幕的"指纹"（1-2 个检查，命中才算进入该家族候选）。
+    # 定位时依次跑签名（全过即停），只对命中家族内的状态做完整检查；
+    # 全部未命中 / 家族内无状态通过 → 回退全扫描（locate_state_full 等价，
+    # 正确性兜底：签名是启发式提速，不改变最终定位结果的正确性边界——
+    # 只要真状态所在家族的签名在其屏幕上命中，两阶段与全扫描结果一致，
+    # 由 FakeGame 等价性测试逐屏验证）。
+    family_discriminators: List[Tuple[str, List[CheckSpec]]] = field(default_factory=list)
 
     def __post_init__(self):
         names = [s.name for s in self.states]
@@ -267,6 +283,9 @@ class Flow:
                 raise ValueError(f"转移 {t.name} 的端点不在流的状态集中")
             if not t.post_check:
                 raise ValueError(f"转移 {t.name} 缺少 post_check（需求：每次转移必配状态检查）")
+        for fam, _sig in self.family_discriminators:
+            if not [s for s in self.states if s.family == fam]:
+                raise ValueError(f"家族 {fam} 的签名已配置但没有成员状态")
 
     # ---------------- 转移图查询（路径规划接口） ----------------
 
@@ -297,6 +316,36 @@ class Flow:
         while q:
             cur = q.popleft()
             for nxt in adj.get(cur, ()):
+                if nxt not in prev:
+                    prev[nxt] = cur
+                    if nxt == b:
+                        path = [b]
+                        while prev[path[-1]] is not None:
+                            path.append(prev[path[-1]])
+                        return path[::-1]
+                    q.append(nxt)
+        return None
+
+    def nav_path(self, a: str, b: str) -> Optional[List[str]]:
+        """连通导航路径：只走 nav_cost 非空的"安全边"（取消/返回/关框/
+        部署/入场等），按步数 BFS、同层按代价小者优先。
+        动作边（开战斗/补给/撤离/换人/筛选…）永不参与——它们有真实
+        后果，只能由流显式执行。"""
+        if a == b:
+            return [a]
+        from collections import deque
+
+        adj: Dict[str, List[Tuple[int, str]]] = {}
+        for t in self.transitions:
+            if t.nav_cost is not None:
+                adj.setdefault(t.from_state, []).append((t.nav_cost, t.to_state))
+        for k in adj:
+            adj[k].sort()
+        prev: Dict[str, Optional[str]] = {a: None}
+        q = deque([a])
+        while q:
+            cur = q.popleft()
+            for _, nxt in adj.get(cur, ()):
                 if nxt not in prev:
                     prev[nxt] = cur
                     if nxt == b:
@@ -429,10 +478,48 @@ class Runner:
     # ---------------- 状态定位 ----------------
 
     def locate_state(self, image: object, skip: Optional[str] = None) -> Optional[str]:
-        """在同一张截图上按优先级尝试各状态，返回第一个全部检查通过的状态名。
+        """两阶段定位（提速核心：2026-10-10 用户要求"快一点"）。
 
+        阶段 1：家族判别链（有序、早停）——每家族 1 次识别（判别节点），
+        命中即锁定候选家族；阶段 2：只对候选家族内的状态做完整检查
+        （家族内按 locate_priority）。全部判别未命中 / 家族内无状态通过
+        → 回退全扫描（与旧版逐状态扫描等价，正确性兜底）。
+
+        旧版（v1 全扫描）对照：`locate_state_full`（保留供等价性测试）。
         skip：跳过该状态（其检查已知不通过，避免重复识别，见 goto 快路径）。
         """
+        ordered = sorted(self.flow.states, key=lambda s: (s.locate_priority, s.name))
+        tried: set = set()
+
+        def scan(states) -> Optional[str]:
+            for state in states:
+                if skip is not None and state.name == skip:
+                    continue
+                if state.name in tried:
+                    continue
+                tried.add(state.name)
+                if self._specs_pass(self._check_specs(state.checks, image)):
+                    return state.name
+            return None
+
+        for fam, sig in self.flow.family_discriminators:
+            if not self._specs_pass(self._check_specs(sig, image, label=f"family:{fam}")):
+                continue
+            members = [s for s in ordered if s.family == fam]
+            self._log("DEBUG",
+                      f"locate: 家族命中 {fam} "
+                      f"({' '.join('!' + c.node if c.inverted else c.node for c in sig)})"
+                      f" -> {len(members)} 候选")
+            hit = scan(members)
+            if hit:
+                return hit
+            self._log("WARNING",
+                      f"locate: 家族 {fam} 命中但家族内无状态全过 → 全扫描回退")
+            return scan(ordered)
+        return scan(ordered)
+
+    def locate_state_full(self, image: object, skip: Optional[str] = None) -> Optional[str]:
+        """v1 全扫描定位（按优先级逐状态全检查）。保留供两阶段等价性测试。"""
         ordered = sorted(self.flow.states, key=lambda s: (s.locate_priority, s.name))
         for state in ordered:
             if skip is not None and state.name == skip:
@@ -515,8 +602,17 @@ class Runner:
 
         raise TransitionFailedError(f"转移 {t.name} 重试{t.max_retries}次后仍失败: {last_detail}")
 
-    def goto(self, target: str) -> None:
-        """转移到目标状态（幂等）。"""
+    def goto(self, target: str, _reroute: int = 3) -> None:
+        """转移到目标状态（幂等；基于连通步数的导航 + 异常恢复）。
+
+        1) 快路径：目标检查通过 → 已到达（跳过）；
+        2) 直连边：current -> target 有边 → 原样执行（流语义不变）；
+        3) 连通导航：无直连边时，沿"安全边"（Transition.nav_cost 非空：
+           取消/返回/关框/部署/入场等）BFS 最短路径逐跳执行；
+           动作边（开战斗/补给/撤离/换人/筛选，有真实后果）永不参与；
+        4) 异常恢复：某跳失败（重试耗尽/无法定位）→ 重新定位当前位置
+           并重路由（最多 _reroute 次），而不是整个流直接中止。
+        """
         self._abort_if_stopped()
         target_state = self._require_state(target)
 
@@ -538,14 +634,51 @@ class Runner:
             return
 
         t = self._transitions.get((current, target))
-        if t is None:
-            frame = self._frame(f"no_transition_{current}_to_{target}", image)
-            available = sorted(f"{a}->{b}" for (a, b) in self._transitions)
+        if t is not None:
+            self._log("INFO", f"goto {target}: 定位={current} | 直连边")
+            self.run_transition(t)
+            return
+
+        # ---------- 连通导航（无直连边） ----------
+        path = self.flow.nav_path(current, target)
+        if path is None or len(path) < 2:
+            frame = self._frame(f"no_route_{current}_to_{target}", image)
+            direct = sorted(f"{a}->{b}" for (a, b) in self._transitions)
+            nav = sorted(f"{t2.from_state}->{t2.to_state}"
+                         for t2 in self.flow.transitions if t2.nav_cost is not None)
             raise NoTransitionError(
-                f"没有 {current} -> {target} 的转移。已定义: {available} {frame}"
+                f"没有 {current} -> {target} 的直连转移或安全连通路径。"
+                f"全部直连边: {direct} | 可导航边: {nav} {frame}"
             )
-        self._log("INFO", f"goto {target}: 定位={current}")
-        self.run_transition(t)
+        self._log("INFO",
+                  f"goto {target}: 定位={current} | 连通导航 {' -> '.join(path)}")
+        self._nav_walk(path, target, _reroute)
+
+    def _nav_walk(self, path: List[str], target: str, reroute_left: int) -> None:
+        """逐跳执行连通路径；跳失败时重新定位 + 重路由（异常恢复）。"""
+        i = 1
+        while i < len(path):
+            nxt = path[i]
+            try:
+                self.goto(nxt)  # 每跳重新定位（自纠正）；跳内仍可再导航
+                i += 1
+            except (TransitionFailedError, NoTransitionError,
+                    StateMismatchError) as e:
+                if reroute_left <= 0:
+                    self._log("ERROR", f"连通导航放弃: {e}")
+                    raise
+                image = self.ctx.screenshot()
+                now = self.locate_state(image)
+                new_path = self.flow.nav_path(now, target) if now else None
+                if not new_path or len(new_path) < 2:
+                    frame = self._frame(f"reroute_dead_{now}_to_{target}", image)
+                    raise NoTransitionError(
+                        f"重路由失败: 当前 {now} 无安全路径到 {target} {frame}") from e
+                self._log("WARNING",
+                          f"连通导航重路由（{e.__class__.__name__}）: "
+                          f"当前={now} -> {' -> '.join(new_path)}")
+                path, i = new_path, 1
+                reroute_left -= 1
 
     def wait_until(self, step: WaitUntil) -> None:
         deadline = time.monotonic() + step.timeout_ms / 1000.0

@@ -47,6 +47,7 @@ C = CheckSpec  # 简写
 # 加 !bar_end 守卫：战斗屏同样命中 map/init.png 模板（实测），必须排除。
 S_MAP = State(
     name="map",
+    family="map",
     checks=[C("SM81N_map"), C("SM81N_map_t1", inverted=True),
             C("SM81N_map_t2", inverted=True), C("SM81N_map_t3", inverted=True),
             C("SM81N_bar_end", inverted=True)],
@@ -55,6 +56,7 @@ S_MAP = State(
 )
 S_MAP_T1 = State(
     name="map_t1",
+    family="map",
     checks=[C("SM81N_map"), C("SM81N_map_t1"),
             C("SM81N_map_t2", inverted=True), C("SM81N_map_t3", inverted=True),
             C("SM81N_bar_end", inverted=True)],
@@ -63,6 +65,7 @@ S_MAP_T1 = State(
 )
 S_MAP_T12 = State(
     name="map_t12",
+    family="map",
     checks=[C("SM81N_map"), C("SM81N_map_t1"), C("SM81N_map_t2"),
             C("SM81N_map_t3", inverted=True),
             C("SM81N_bar_end", inverted=True)],
@@ -71,6 +74,7 @@ S_MAP_T12 = State(
 )
 S_MAP_FULL = State(
     name="map_full",
+    family="map",
     checks=[C("SM81N_map"), C("SM81N_map_t1"), C("SM81N_map_t2"),
             C("SM81N_map_t3"), C("SM81N_start"),
             C("SM81N_bar_end", inverted=True)],
@@ -90,6 +94,7 @@ S_MAP_FULL = State(
 # !supply 排除战中 2队框（补给按钮是其独有特征 → 落到 t2_box）。
 S_SQUAD1_BOX = State(
     name="squad1_box",
+    family="box",
     checks=[C("SM81N_t1wd"), C("SM81N_box_cancel"),
             C("SM81N_supply", inverted=True)],
     desc="战前机场框（1队打开，撤离+取消可见）",
@@ -97,6 +102,7 @@ S_SQUAD1_BOX = State(
 )
 S_SQUAD2_BOX = State(
     name="squad2_box",
+    family="box",
     checks=[C("SM81N_t1wd"), C("SM81N_box_cancel"),
             C("SM81N_supply", inverted=True)],
     desc="战前机场框（2队打开，撤离+取消可见）",
@@ -106,6 +112,7 @@ S_SQUAD2_BOX = State(
 # ---- 战斗相关状态 ----
 S_BATTLE = State(
     name="battle",
+    family="battle",
     # 战斗中、2队仍在场上（补给撤离前）。不含 妖精 要求：
     # 点过 2队 标记后单位处于选中态（妖精面板可能出现），不能做必要条件。
     checks=[C("SM81N_bar_end"), C("SM81N_supply", inverted=True),
@@ -115,6 +122,7 @@ S_BATTLE = State(
 )
 S_BATTLE_NO2 = State(
     name="battle_no2",
+    family="battle",
     # 2队已撤离（标记消失）。!妖精 区分战后（妖精=1队被选中）
     checks=[C("SM81N_bar_end"), C("SM81N_supply", inverted=True),
             C("SM81N_map_t2", inverted=True),
@@ -124,6 +132,7 @@ S_BATTLE_NO2 = State(
 )
 S_T2_BOX = State(
     name="t2_box",
+    family="inbattle_box",
     # 战斗中 2队机场框（补给+撤离同屏）。战前框有 开始作战 → 排除。
     checks=[C("SM81N_supply"), C("SM81N_start", inverted=True)],
     desc="战斗中 2队机场框（补给可见）",
@@ -131,6 +140,7 @@ S_T2_BOX = State(
 )
 S_EQUIP_OVERFLOW = State(
     name="equip_overflow",
+    family="equip",
     checks=[C("SM81N_equip_overflow")],
     desc="装备溢出处理弹窗（装备强化选项）",
     locate_priority=37,
@@ -141,12 +151,14 @@ S_EQUIP_OVERFLOW = State(
 # 中间 AP 值依赖点数消耗规则，不作状态依据；只门控"AP=1"。
 S_PLAN_DONE = State(
     name="plan_done",
+    family="planfam",
     checks=[C("SM81N_plan"), C("SM81N_ap1")],
     desc="计划模式（炸狗点已录入，行动点数=1）",
     locate_priority=35,
 )
 S_PLAN = State(
     name="plan",
+    family="planfam",
     checks=[C("SM81N_plan"), C("SM81N_ap1", inverted=True)],
     desc="计划模式（未录入/未达成 AP=1）",
     locate_priority=36,
@@ -155,6 +167,7 @@ S_PLAN = State(
 # ---- 战后/重置状态族 ----
 S_POSTBATTLE = State(
     name="postbattle",
+    family="battle",
     # 战斗结束：1队自动选中 → 妖精面板出现。2队已撤离（!t2 由 battle_no2
     # 语义覆盖，这里不重复要求）。!supply 排除框屏。
     checks=[C("SM81N_bar_end"), C("SM81N_battle"),
@@ -164,6 +177,7 @@ S_POSTBATTLE = State(
 )
 S_T1_WD_POPUP = State(
     name="t1_wd_popup",
+    family="box",
     # 战后 1队框 = 与战前框同布局的"选择梯队"面板（撤离+取消可见、
     # 无补给）。识别上与 squad1_box 不可区分（见上）——此状态仅作为
     # 转移目标名（goto 目标检查短路 + T_*__t1_wd_popup 的动作来源），
@@ -175,6 +189,7 @@ S_T1_WD_POPUP = State(
 )
 S_WITHDRAW_OK = State(
     name="withdraw_ok",
+    family="wd_popup",
     # 撤离确认对话框（战中 2队 / 战后 1队 同布局，同节点）
     checks=[C("SM81N_withdraw_confirm")],
     desc="撤离确认对话框",
@@ -182,12 +197,14 @@ S_WITHDRAW_OK = State(
 )
 S_ENDMENU = State(
     name="endmenu",
+    family="endmenu",
     checks=[C("SM81N_redeploy")],
     desc="左上角菜单（重新作战可见）",
     locate_priority=42,
 )
 S_SETTLEMENT = State(
     name="settlement",
+    family="settlement",
     # 过场屏：执行计划 → 结算 的过渡（约数秒），点击无效。
     # 仅作 locate/日志用（WaitUntil 轮询会自然穿过），流不直接跳转它。
     checks=[C("SM81N_settlement")],
@@ -239,6 +256,7 @@ def transitions_81n() -> list[Transition]:
         # ---------- 进入地图 ----------
         Transition(
             name="T_stage_list__stage_detail",
+            nav_cost=1,  # 连通导航安全边
             from_state="stage_list", to_state="stage_detail",
             actions=[_anchor("SM81N_stage_list")],
             post_check=[C("SM81N_stage_detail")],
@@ -246,6 +264,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_stage_detail__map",
+            nav_cost=1,  # 连通导航安全边
             from_state="stage_detail", to_state="map",
             actions=[_anchor("SM81N_stage_detail"), ActionSpec(kind="wait", ms=3000)],
             post_check=[C("SM81N_map"), C("SM81N_bar_end", inverted=True)],
@@ -253,6 +272,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_stage_detail__map_full",
+            nav_cost=1,  # 连通导航安全边
             # 装备溢出恢复用：重进 8-1N 后地图保持已部署
             from_state="stage_detail", to_state="map_full",
             actions=[_anchor("SM81N_stage_detail"), ActionSpec(kind="wait", ms=3000)],
@@ -264,6 +284,7 @@ def transitions_81n() -> list[Transition]:
         # ---------- 部署（1队/2队：港口模板锚点 → 确定OCR锚点；3队：重装机场流程） ----------
         Transition(
             name="T_map__map_t1",
+            nav_cost=1,  # 连通导航安全边
             from_state="map", to_state="map_t1",
             actions=[
                 _anchor("SM81N_port1", kind="long_press", duration=20),
@@ -275,6 +296,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_map_t1__map_t12",
+            nav_cost=1,  # 连通导航安全边
             from_state="map_t1", to_state="map_t12",
             actions=[
                 _anchor("SM81N_port2", kind="long_press", duration=50),
@@ -286,6 +308,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_map_t12__map_full",
+            nav_cost=1,  # 连通导航安全边
             # 3队=重装机场：porth → "选择重装部队"tab → 第一个单位 → 部署
             # （映射 部署.json 81N部署_部署3队/部署重装/部署重装选择/部署重装确定）
             from_state="map_t12", to_state="map_full",
@@ -306,6 +329,7 @@ def transitions_81n() -> list[Transition]:
         # ---------- 入口弹药检查（直接查 1队） ----------
         Transition(
             name="T_map_full__squad1_box",
+            nav_cost=1,  # 连通导航安全边
             from_state="map_full", to_state="squad1_box",
             actions=[
                 _anchor("SM81N_map_t1"),  # 点击地图 1队 标记 → 机场框
@@ -316,6 +340,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_squad1_box__map_full",
+            nav_cost=1,  # 连通导航安全边
             from_state="squad1_box", to_state="map_full",
             actions=[
                 _anchor("SM81N_box_cancel"),  # 取消 → 关框
@@ -357,6 +382,7 @@ def transitions_81n() -> list[Transition]:
         # ---------- 编队链（入口 else 分支 / 稳定态 共用；从 2队框 进入） ----------
         Transition(
             name="T_map_full__squad2_box",
+            nav_cost=1,  # 连通导航安全边
             from_state="map_full", to_state="squad2_box",
             actions=[
                 _anchor("SM81N_map_t2"),  # 点击地图 2队 标记 → 机场框
@@ -367,6 +393,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_squad1_box__formation",
+            nav_cost=1,  # 连通导航安全边
             # squad1/squad2_box 同屏同优先级，locate 恒返回 squad1_box
             # （名称序在前）——编成入口转移必须挂在 squad1_box 上，
             # 两个框（1队入口检查 / 2队编队入口）共用同一动作。
@@ -380,6 +407,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_formation__charselect",
+            nav_cost=1,  # 连通导航安全边
             from_state="formation", to_state="charselect",
             actions=[
                 _click(234, 339),  # 2队打手槽位卡（原 target [193,278,82,123] 中心）
@@ -448,6 +476,7 @@ def transitions_81n() -> list[Transition]:
         # 可直接两步返回（← 返回 选人→编成→地图；弹层态先关弹层） ----------
         Transition(
             name="T_charselect__map_full",
+            nav_cost=1,  # 连通导航安全边
             from_state="charselect", to_state="map_full",
             actions=[
                 _anchor("SM81N_back2map"),
@@ -461,6 +490,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_charselect_shown__map_full",
+            nav_cost=1,  # 连通导航安全边
             from_state="charselect_shown", to_state="map_full",
             actions=[
                 _anchor("SM81N_back2map"),
@@ -474,6 +504,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_charselect_filter__map_full",
+            nav_cost=1,  # 连通导航安全边
             from_state="charselect_filter", to_state="map_full",
             actions=[
                 _anchor("SM81N_popup_confirm"),
@@ -507,6 +538,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_formation__map_full",
+            nav_cost=1,  # 连通导航安全边
             from_state="formation", to_state="map_full",
             actions=[
                 _anchor("SM81N_back2map"),  # 左上返回
@@ -543,6 +575,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_equip_overflow__stage_detail",
+            nav_cost=1,  # 连通导航安全边
             # 装备溢出恢复（映射 战斗.json 选择装备处理方式 → 81N进入_点击8-1N）：
             # 点"装备强化"选项关弹窗 → 点 8-1N 入口重进
             from_state="equip_overflow", to_state="stage_detail",
@@ -752,6 +785,7 @@ def transitions_81n() -> list[Transition]:
         ),
         Transition(
             name="T_endmenu__map_full",
+            nav_cost=2,  # 连通导航安全边
             # 重新作战：过渡 ~16s（实测），retries 覆盖
             from_state="endmenu", to_state="map_full",
             actions=[
