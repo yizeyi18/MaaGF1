@@ -140,6 +140,8 @@ jobs:
           pip install requests pyinstaller
           pip install maafw==${{ steps.config.outputs.maafw_version }}
           pip install numpy Pillow
+          # MCP 远程控制服务器（agent 进程内 maa_mcp 包依赖）
+          pip install mcp
 
           echo "=== Installed packages ==="
           pip list
