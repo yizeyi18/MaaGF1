@@ -260,7 +260,9 @@ def transitions_81n() -> list[Transition]:
             from_state="stage_list", to_state="stage_detail",
             actions=[_anchor("SM81N_stage_list")],
             post_check=[C("SM81N_stage_detail")],
-            max_retries=3, post_wait_ms=1000,
+            # 2500ms：详情屏过渡实测 ~1.5-2s，1000ms 时 post_check OCR 与
+            # 过渡竞态（run#9 首跳失败的诱因之一）
+            max_retries=3, post_wait_ms=2500,
         ),
         Transition(
             name="T_stage_detail__map",

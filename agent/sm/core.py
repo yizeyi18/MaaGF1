@@ -636,8 +636,18 @@ class Runner:
         t = self._transitions.get((current, target))
         if t is not None:
             self._log("INFO", f"goto {target}: 定位={current} | 直连边")
-            self.run_transition(t)
-            return
+            try:
+                self.run_transition(t)
+                return
+            except (TransitionFailedError, NoTransitionError,
+                    StateMismatchError, ActionAnchorMissError) as e:
+                # 直连边失败 ≠ 流终止（2026-10-10 run#9 教训）：锚点未命中
+                # 常是"点击已生效但屏幕在过渡/识别竞态"——重新定位 + 走
+                # 连通路径重路由，而不是把异常抛给流层。
+                new_path = self._reroute_or_raise(e, target, _reroute)
+                if new_path:
+                    self._nav_walk(new_path, target, _reroute - 1)
+                return
 
         # ---------- 连通导航（无直连边） ----------
         path = self.flow.nav_path(current, target)
@@ -654,6 +664,33 @@ class Runner:
                   f"goto {target}: 定位={current} | 连通导航 {' -> '.join(path)}")
         self._nav_walk(path, target, _reroute)
 
+    def _reroute_or_raise(self, e: Exception, target: str,
+                          reroute_left: int) -> List[str]:
+        """转移失败后的统一恢复（异常恢复核心）：重新定位当前位置，
+        重算安全连通路径。
+
+        返回: 新路径（[0]=当前态）；[] = 已在目标态（按到达处理）。
+        重路由预算耗尽 / 无安全路径 → 抛出原异常（NoTransitionError 包装）。
+        """
+        if reroute_left <= 0:
+            self._log("ERROR", f"连通导航放弃: {e}")
+            raise e
+        image = self.ctx.screenshot()
+        now = self.locate_state(image)
+        if now == target:
+            self._log("INFO",
+                      f"异常恢复: 重定位后已在目标态 {target}，按到达处理")
+            return []
+        new_path = self.flow.nav_path(now, target) if now else None
+        if not new_path or len(new_path) < 2:
+            frame = self._frame(f"reroute_dead_{now}_to_{target}", image)
+            raise NoTransitionError(
+                f"重路由失败: 当前 {now} 无安全路径到 {target} {frame}") from e
+        self._log("WARNING",
+                  f"连通导航重路由（{e.__class__.__name__}）: "
+                  f"当前={now} -> {' -> '.join(new_path)}")
+        return new_path
+
     def _nav_walk(self, path: List[str], target: str, reroute_left: int) -> None:
         """逐跳执行连通路径；跳失败时重新定位 + 重路由（异常恢复）。"""
         i = 1
@@ -663,20 +700,10 @@ class Runner:
                 self.goto(nxt)  # 每跳重新定位（自纠正）；跳内仍可再导航
                 i += 1
             except (TransitionFailedError, NoTransitionError,
-                    StateMismatchError) as e:
-                if reroute_left <= 0:
-                    self._log("ERROR", f"连通导航放弃: {e}")
-                    raise
-                image = self.ctx.screenshot()
-                now = self.locate_state(image)
-                new_path = self.flow.nav_path(now, target) if now else None
-                if not new_path or len(new_path) < 2:
-                    frame = self._frame(f"reroute_dead_{now}_to_{target}", image)
-                    raise NoTransitionError(
-                        f"重路由失败: 当前 {now} 无安全路径到 {target} {frame}") from e
-                self._log("WARNING",
-                          f"连通导航重路由（{e.__class__.__name__}）: "
-                          f"当前={now} -> {' -> '.join(new_path)}")
+                    StateMismatchError, ActionAnchorMissError) as e:
+                new_path = self._reroute_or_raise(e, target, reroute_left)
+                if not new_path:
+                    return  # 已在目标态
                 path, i = new_path, 1
                 reroute_left -= 1
 

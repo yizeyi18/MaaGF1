@@ -57,13 +57,27 @@
   "recognition": "TemplateMatch",
   "template": "combat/levelUp/8-1N/map_team1.png",
   "threshold": 0.5,
-  "next": []
+  "next": [],
+  "roi": [
+   190,
+   569,
+   200,
+   151
+  ],
+  "$说明": "｜2026-10-10 加 slot ROI 防按钮碎片误命中"
  },
  "SM81N_map_t2": {
   "recognition": "TemplateMatch",
   "template": "combat/levelUp/8-1N/map_team2.png",
   "threshold": 0.5,
-  "next": []
+  "next": [],
+  "roi": [
+   246,
+   100,
+   200,
+   200
+  ],
+  "$说明": "｜2026-10-10 加 slot ROI 防按钮碎片误命中"
  },
  "SM81N_map_t3": {
   "recognition": "TemplateMatch",
@@ -72,7 +86,14 @@
    "combat/levelUp/8-1N/map_teamh.png"
   ],
   "threshold": 0.5,
-  "next": []
+  "next": [],
+  "roi": [
+   1058,
+   174,
+   200,
+   200
+  ],
+  "$说明": "｜2026-10-10 加 slot ROI 防按钮碎片误命中"
  },
  "SM81N_port1": {
   "recognition": "TemplateMatch",

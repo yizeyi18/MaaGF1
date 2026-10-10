@@ -26,6 +26,14 @@ from .core import (
 )
 from .missing import describe_missing, is_missing
 
+
+def _smcore():
+    """当前代的 sm.core 模块（跨热更新安全：update_sm_file purge 后
+    本模块旧实例仍可能被注册表持有，异常类必须取当前代，否则
+    新代 Runner 的 except SMError 捕不到本模块抛的旧代异常）。"""
+    import importlib
+    return importlib.import_module("sm.core")
+
 try:  # 复用 agent 现有日志（agent/action/log.py），导入失败时退回 print
     from action.log import MaaLog_Debug, MaaLog_Info, MaaLog_Info as MaaLog_Warn, MaaLog_Info as MaaLog_Err
     _LOG = True
@@ -133,7 +141,7 @@ class MaaBridge(SMContext):
                 img = np.ascontiguousarray(img[:, :, :3])
             return img
         except Exception as e:
-            raise SMError(f"截图失败（框架/连接异常）: {e}") from e
+            raise _smcore().SMError(f"截图失败（框架/连接异常）: {e}") from e
 
     def check(self, spec: CheckSpec, image: Optional["object"] = None) -> CheckResult:
         # 缺失图片：按"未命中"处理并告警（不抛异常）。
@@ -144,7 +152,7 @@ class MaaBridge(SMContext):
         # 误报第一个全普通检查的状态。
         if is_missing(spec.node):
             self._warn_missing_once(spec.node)
-            return CheckResult(ok=spec.inverted, spec=spec, detail=None)
+            return _smcore().CheckResult(ok=spec.inverted, spec=spec, detail=None)
         if image is None:
             image = self.screenshot()
         detail = self._recognize(spec.node, image)
@@ -154,8 +162,8 @@ class MaaBridge(SMContext):
             self.log("DEBUG", f"reco {spec.node} -> {'hit' if hit else 'miss'} frame={frame}")
         if detail is None:
             # 识别失败/无详情 → 按"未命中"处理（与 MCP bridge 同语义）
-            return CheckResult(ok=spec.inverted, spec=spec, detail=None)
-        return CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
+            return _smcore().CheckResult(ok=spec.inverted, spec=spec, detail=None)
+        return _smcore().CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
 
     def _detail_from_event(self, reco_id: int):
         """兜底：从 Node.Recognition.* 事件取识别结果（见 sm/reco_capture）。
@@ -187,7 +195,7 @@ class MaaBridge(SMContext):
         except SMError:
             raise
         except Exception as e:
-            raise SMError(f"动作 {action.describe()} 执行失败: {e}\n{traceback.format_exc()}") from e
+            raise _smcore().SMError(f"动作 {action.describe()} 执行失败: {e}\n{traceback.format_exc()}") from e
 
     def save_debug_image(self, tag: str, image: "object") -> str:
         os.makedirs(self._debug_dir, exist_ok=True)
@@ -219,7 +227,7 @@ class MaaBridge(SMContext):
             if detail is None:
                 # fail-closed：条件识别失败不能猜"未命中"（可能误执行动作）
                 frame = self.save_debug_image(f"if_fail_{a.if_node}", image)
-                raise SMError(f"if 条件识别失败: {a.if_node}（动作 {a.describe()}）"
+                raise _smcore().SMError(f"if 条件识别失败: {a.if_node}（动作 {a.describe()}）"
                               + (f" frame={frame}" if frame else ""))
             if not detail.hit:
                 frame = self._reco_frame(f"if_{a.if_node}", image, False)
@@ -238,7 +246,7 @@ class MaaBridge(SMContext):
                 # "重开弹层"点击 → 把已开弹层点关 → 后续锚点全灭。
                 # 抛错让本次尝试失败重试（新截图重新判定）。
                 frame = self.save_debug_image(f"unless_fail_{a.unless_node}", image)
-                raise SMError(f"unless 条件识别失败: {a.unless_node}（动作 {a.describe()}）"
+                raise _smcore().SMError(f"unless 条件识别失败: {a.unless_node}（动作 {a.describe()}）"
                               + (f" frame={frame}" if frame else ""))
             if detail.hit:
                 frame = self._reco_frame(f"unless_{a.unless_node}", image, False)
@@ -259,7 +267,7 @@ class MaaBridge(SMContext):
                 frame = self.save_debug_image(f"anchor_miss_{a.anchor_node}", image)
                 self.log("WARNING", f"锚点 {a.anchor_node} -> miss（动作 {a.describe()}）"
                          + (f" frame={frame}" if frame else ""))
-                raise ActionAnchorMissError(
+                raise _smcore().ActionAnchorMissError(
                     f"锚点识别未命中: {a.anchor_node}（动作 {a.describe()}）"
                 )
             x, y = self._center(detail, a)
@@ -282,7 +290,7 @@ class MaaBridge(SMContext):
         elif a.kind == "zoom_out":
             self._pinch(x, y, dist=abs(a.duration) or 60, inward=True)
         else:
-            raise SMError(f"未知动作类型: {a.kind}")
+            raise _smcore().SMError(f"未知动作类型: {a.kind}")
         if not a.anchor_node:
             extra = f" -> ({a.x2},{a.y2})" if a.kind == "swipe" else ""
             self.log("INFO", f"动作 {a.kind} ({x},{y}){extra}")
@@ -297,14 +305,14 @@ class MaaBridge(SMContext):
 
     def _recognize(self, node: str, image: "object"):
         if is_missing(node):
-            raise MissingImageError(describe_missing(node))
+            raise _smcore().MissingImageError(describe_missing(node))
         try:
             # 直调 C API 拿 reco_id——绑定版 run_recognition 在
             # GetRecognitionDetail 失败（v5.8.1 必然）后吞掉 reco_id
             # 返回 None，事件兜底就失去关联键
             reco_id = self._post_reco(node, image)
         except Exception as e:
-            raise SMError(f"识别 {node} 失败: {e}") from e
+            raise _smcore().SMError(f"识别 {node} 失败: {e}") from e
         if not reco_id:
             return None
         try:

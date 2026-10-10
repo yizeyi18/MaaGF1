@@ -10,6 +10,7 @@ param 与 maa.pipeline 中的参数 dataclass 字段一一对应。
 from __future__ import annotations
 
 import dataclasses
+import importlib
 import os
 import sys
 import threading
@@ -17,7 +18,13 @@ import time
 import traceback
 from typing import Dict, Optional, Tuple
 
-from sm.core import (
+# sm.core 类组【动态导入】（2026-10-10 实机教训）：update_sm_file 会 purge
+# 并重建 sm 包模块；若本模块在导入期绑定旧代 SMError 类对象，热更新后
+# 本模块 raise 的异常不是新代 Runner `except SMError` 的子类 → 异常穿透
+# 重试/重路由逻辑直接杀流（run #9：ActionAnchorMissError 未被捕获）。
+# 异常类与 CheckResult 构造一律经 _smcore() 取当前代。类型标注不受影响
+# （from __future__ import annotations 下仅为字符串）。
+from sm.core import (  # noqa: F401  （仅类型标注用）
     ActionAnchorMissError,
     ActionSpec,
     CheckResult,
@@ -27,6 +34,11 @@ from sm.core import (
     SMError,
 )
 from sm.missing import describe_missing, is_missing
+
+
+def _smcore():
+    """当前代的 sm.core 模块（每次取最新，跨热更新安全）。"""
+    return importlib.import_module("sm.core")
 
 
 def _install_stop_probe(ev: "threading.Event", name: str) -> None:
@@ -81,7 +93,7 @@ def node_to_reco(node_data: Dict) -> Tuple[str, "object"]:
     param = reco.get("param") or {}
     cls = _reco_param_classes().get(rtype)
     if cls is None:
-        raise SMError(f"不支持的识别类型: {rtype or '(空)'}")
+        raise _smcore().SMError(f"不支持的识别类型: {rtype or '(空)'}")
     fields = {f.name for f in dataclasses.fields(cls)}
     kwargs = {k: v for k, v in param.items() if k in fields}
     return rtype, cls(**kwargs)
@@ -174,7 +186,7 @@ class TaskerBridge(SMContext):
     def check(self, spec: CheckSpec, image: "object" = None) -> CheckResult:
         if is_missing(spec.node):
             self._warn_missing_once(spec.node)
-            return CheckResult(ok=spec.inverted, spec=spec, detail=None)
+            return _smcore().CheckResult(ok=spec.inverted, spec=spec, detail=None)
         if image is None:
             image = self.screenshot()
         detail = self._recognize(spec.node, image)
@@ -187,8 +199,8 @@ class TaskerBridge(SMContext):
             # 普通检查（须命中）不通过，inverted 检查（须不命中）通过。
             # 此前误写 ok=(not inverted)——把识别失败当命中，基地屏上
             # 所有普通检查全"通过"，locate 必误报优先级最高的状态。
-            return CheckResult(ok=spec.inverted, spec=spec, detail=None)
-        return CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
+            return _smcore().CheckResult(ok=spec.inverted, spec=spec, detail=None)
+        return _smcore().CheckResult(ok=(not hit) if spec.inverted else hit, spec=spec, detail=detail)
 
     def do_action(self, action: ActionSpec) -> None:
         try:
@@ -196,7 +208,7 @@ class TaskerBridge(SMContext):
         except SMError:
             raise
         except Exception as e:
-            raise SMError(f"动作 {action.describe()} 执行失败: {e}\n{traceback.format_exc()}") from e
+            raise _smcore().SMError(f"动作 {action.describe()} 执行失败: {e}\n{traceback.format_exc()}") from e
 
     def save_debug_image(self, tag: str, image: "object") -> str:
         os.makedirs(self._debug_dir, exist_ok=True)
@@ -223,10 +235,10 @@ class TaskerBridge(SMContext):
 
     def _recognize(self, node: str, image: "object"):
         if is_missing(node):
-            raise MissingImageError(describe_missing(node))
+            raise _smcore().MissingImageError(describe_missing(node))
         node_data = self._resource.get_node_data(node)
         if node_data is None:
-            raise SMError(f"识别节点不存在: {node}（资源未加载或节点名错误）")
+            raise _smcore().SMError(f"识别节点不存在: {node}（资源未加载或节点名错误）")
         rtype, param = node_to_reco(node_data)
         # post_recognition 的图像入口只接受 3 通道（上游绑定的
         # ImageBuffer.set 硬编码 CV_8UC3）；控制器原始截图是 4 通道 BGRA。
@@ -299,7 +311,7 @@ class TaskerBridge(SMContext):
             if detail is None:
                 # fail-closed：条件识别失败不能猜"未命中"（可能误执行动作）
                 frame = self.save_debug_image(f"if_fail_{a.if_node}", image)
-                raise SMError(f"if 条件识别失败: {a.if_node}（动作 {a.describe()}）"
+                raise _smcore().SMError(f"if 条件识别失败: {a.if_node}（动作 {a.describe()}）"
                               + (f" frame={frame}" if frame else ""))
             if not detail.hit:
                 frame = self._reco_frame(f"if_{a.if_node}", image, False)
@@ -318,7 +330,7 @@ class TaskerBridge(SMContext):
             if detail is None:
                 # fail-closed：识别失败抛错重试，落帧留证
                 frame = self.save_debug_image(f"unless_fail_{a.unless_node}", image)
-                raise SMError(f"unless 条件识别失败: {a.unless_node}（动作 {a.describe()}）"
+                raise _smcore().SMError(f"unless 条件识别失败: {a.unless_node}（动作 {a.describe()}）"
                               + (f" frame={frame}" if frame else ""))
             if detail.hit:
                 frame = self._reco_frame(f"unless_{a.unless_node}", image, False)
@@ -339,7 +351,7 @@ class TaskerBridge(SMContext):
                 frame = self.save_debug_image(f"anchor_miss_{a.anchor_node}", image)
                 self.log("WARNING", f"锚点 {a.anchor_node} -> miss（动作 {a.describe()}）"
                          + (f" frame={frame}" if frame else ""))
-                raise ActionAnchorMissError(
+                raise _smcore().ActionAnchorMissError(
                     f"锚点识别未命中: {a.anchor_node}（动作 {a.describe()}）"
                 )
             x, y = self._center(detail, a)
@@ -359,9 +371,9 @@ class TaskerBridge(SMContext):
             self._ctrl.post_swipe(x, y, a.x2, a.y2, max(a.duration, 100)).wait()
         elif a.kind in ("zoom_in", "zoom_out"):
             # Win32 控制器无捏合/滚轮事件（contact=鼠标按键）
-            raise SMError("zoom 动作仅 ADB 控制器支持（当前为 Win32）")
+            raise _smcore().SMError("zoom 动作仅 ADB 控制器支持（当前为 Win32）")
         else:
-            raise SMError(f"未知动作类型: {a.kind}")
+            raise _smcore().SMError(f"未知动作类型: {a.kind}")
         if not a.anchor_node:
             extra = f" -> ({a.x2},{a.y2})" if a.kind == "swipe" else ""
             self.log("INFO", f"动作 {a.kind} ({x},{y}){extra}")
