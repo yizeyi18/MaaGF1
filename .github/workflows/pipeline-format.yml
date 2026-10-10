@@ -212,10 +212,7 @@ jobs:
         run: |
           git diff --name-only
           
-          # 只看已跟踪文件的实际改动：git status --porcelain 会把
-          # pipeline_diffs/ 等未跟踪产物算进去，导致无 JSON 改动时
-          # 仍进入 commit 步骤（nothing to commit → 失败）
-          if [ -n "$(git diff --name-only)" ]; then
+          if [ -n "$(git status --porcelain)" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
             CHANGED_COUNT=$(git diff --name-only | wc -l)
             echo "changed_files=$CHANGED_COUNT" >> $GITHUB_OUTPUT
@@ -298,19 +295,10 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "Pipeline Format Bot"
           
-          # Add all potential targets. Use directory-level `git add -A` (any
-          # depth): the previous `dir/**/*.json` glob only matched ONE level
-          # under pipeline/ (bash ** without globstar), so deep files like
-          # tasks/StateMachine/*.json were never staged -> `git commit`
-          # failed with "nothing to commit" (observed 2026-10-09).
-          git add -A assets/resource/pipeline assets/resource_en/pipeline assets/interface.json
-          
-          # Guard: if nothing is actually staged, skip the commit instead of
-          # failing the step.
-          if git diff --cached --quiet; then
-            echo "[WARN] No formatted changes staged, skipping commit"
-            exit 0
-          fi
+          # Add all potential targets
+          git add assets/resource/pipeline/**/*.json || true
+          git add assets/resource_en/pipeline/**/*.json || true
+          git add assets/interface.json || true
           
           cat > commit_message.txt << 'COMMIT_EOF'
           Auto-format pipeline JSON files
@@ -320,7 +308,7 @@ jobs:
           - Validated JSON syntax and structure
           
           Formatting changes:
-          - Consistent indentation (per .maapipeline-format config)
+          - Consistent indentation (4 spaces)
           - Coordinate fields kept inline
           - Control flow fields split across lines
           - Comments preserved where possible
