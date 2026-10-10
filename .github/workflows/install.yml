@@ -180,14 +180,18 @@ jobs:
 
       # --- Cache Mechanism for Agent Compilation ---
       # Only runs if variant is with-agent.
-      # Hashes all python files in agent directory to detect changes.
+      # bootstrap 设计：exe 只冻结第三方依赖（maa/mcp/numpy/...），
+      # 一方代码以源码形式随 Agent 包分发。因此 PyInstaller 只在
+      # 第三方依赖闭包变化时重建：bootstrap.py / build.spec / build.py /
+      # mk/.conf（maafw 版本）/ install.yml（pip 依赖版本）。
+      # agent 代码（maa_mcp/sm/main...）的改动不再触发重编译。
       - name: Cache Agent Build
         if: matrix.variant == 'with-agent'
         id: cache-agent
         uses: actions/cache@v4
         with:
           path: agent/dist
-          key: agent-build-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('agent/**/*.py', 'agent/mk/*.py', 'agent/*.conf') }}
+          key: agent-build-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('agent/bootstrap.py', 'agent/mk/build.spec', 'agent/mk/build.py', 'mk/.conf', '.github/workflows/install.yml') }}
 
       - name: Run Install Script
         shell: bash
@@ -210,6 +214,49 @@ jobs:
           MFA_PRERELEASE: ${{ steps.deps_info.outputs.mfa_prerelease }}
         run: |
           python ./mk/report.py
+
+      # --- 打包拆分（with-agent）---
+      # 完整包 100+ MiB 里大部分极少变化，拆成三个分发件：
+      #   Base    GUI + runtimes（MFAAvalonia 版本变化才需要）
+      #   AgentRT exe + conf（第三方依赖变化才需要，名字带 depskey）
+      #   Agent   agent/src + resource + interface.json（每次构建，最小下载单元）
+      - name: Compute Deps Key
+        if: matrix.variant == 'with-agent'
+        id: depskey
+        shell: bash
+        run: |
+          KEY=$(python -c "import hashlib; print(hashlib.sha256(open('agent/bootstrap.py','rb').read()+open('agent/mk/build.spec','rb').read()+open('agent/mk/build.py','rb').read()+open('mk/.conf','rb').read()).hexdigest()[:8])")
+          echo "key=$KEY" >> $GITHUB_OUTPUT
+
+      - name: Package Split
+        if: matrix.variant == 'with-agent'
+        shell: bash
+        run: |
+          python ./mk/package_split.py --install install --out split \
+            --tag ${{ needs.meta.outputs.tag }} --arch ${{ matrix.arch }} \
+            --mfa-tag ${{ steps.deps_info.outputs.mfa_tag }} \
+            --depskey ${{ steps.depskey.outputs.key }}
+
+      - name: Upload Base Artifact
+        if: matrix.variant == 'with-agent'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaaGF1-Base-${{ steps.deps_info.outputs.mfa_tag }}-${{ matrix.arch }}
+          path: split/base
+
+      - name: Upload AgentRT Artifact
+        if: matrix.variant == 'with-agent'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaaGF1-AgentRT-${{ steps.depskey.outputs.key }}-${{ matrix.arch }}
+          path: split/agent-rt
+
+      - name: Upload Agent Artifact
+        if: matrix.variant == 'with-agent'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaaGF1-Agent-${{ needs.meta.outputs.tag }}-${{ matrix.arch }}
+          path: split/agent
 
       - name: Determine Artifact Name
         id: artifact_name
