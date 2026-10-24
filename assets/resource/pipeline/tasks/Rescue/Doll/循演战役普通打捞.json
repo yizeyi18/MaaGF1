@@ -197,10 +197,17 @@
 		]
 	},
 	"循演战役普通打捞_下一回合": {
-		"recognition": "OCR",
-		"roi": [1000, 660, 50, 50],
-		"expected": ["0", "o", "O"],
-		"replace": ["C", "0"],
+		// 行动点数：路线录入完成后可能为 2 / 0 / -1；Gap2、Gap-1 由给定截图制备，Gap0 取自问题反馈截图的 0 点状态
+		"recognition": "TemplateMatch",
+		"roi": [961, 606, 126, 113],
+		"template": [
+			"combat/xunyan/Gap2.png",
+			"combat/xunyan/Gap0.png",
+			"combat/xunyan/Gap-1.png"
+		],
+		"threshold": 0.7,
+		"green_mask": true,
+		"rate_limit": 200,
 		"action": "LongPress",
 		"duration": 20,
 		"target": [1165, 550, 10, 15],
@@ -210,6 +217,7 @@
 		]
 	},
 	"循演战役普通打捞_执行计划": {
+		// 沿用 81N 稳定实现中的 OCR 状态确认（取消 / 再次作战），不改成模板匹配
 		"recognition": "OCR",
 		"roi": [962, 520, 122, 62],
 		"expected": "取消",
